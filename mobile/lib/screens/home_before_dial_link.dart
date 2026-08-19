@@ -1,16 +1,13 @@
 import 'package:flutter/material.dart';
-import '../services/socket_service.dart';
-import 'dial_screen.dart';
+import 'call_screen.dart';
 
 class HomePage extends StatelessWidget {
 
   final String id;
-  final SocketService socket;
 
   const HomePage({
     super.key,
     required this.id,
-    required this.socket,
   });
 
 
@@ -77,9 +74,8 @@ class HomePage extends StatelessWidget {
 
                   MaterialPageRoute(
 
-                    builder: (_) => DialScreen(
-                      myId: id,
-                      socket: socket,
+                    builder: (_) => CallScreen(
+                      userId: id,
                     ),
 
                   ),

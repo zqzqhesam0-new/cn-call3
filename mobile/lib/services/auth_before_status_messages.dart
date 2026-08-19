@@ -7,7 +7,7 @@ class AuthService {
       "https://ubiquitous-acorn-x9wwxwr9x4rcvq57-8080.app.github.dev";
 
 
-  static Future<String> register(String id, String password) async {
+  static Future<bool> register(String id, String password) async {
 
     try {
 
@@ -22,18 +22,17 @@ class AuthService {
         }),
       );
 
-      return response.body;
+      return response.body == "REGISTER_OK";
 
     } catch (e) {
 
-      return "SERVER_ERROR";
+      return false;
 
     }
   }
 
 
-
-  static Future<String> login(String id, String password) async {
+  static Future<bool> login(String id, String password) async {
 
     try {
 
@@ -48,11 +47,11 @@ class AuthService {
         }),
       );
 
-      return response.body;
+      return response.body == "LOGIN_OK";
 
     } catch (e) {
 
-      return "SERVER_ERROR";
+      return false;
 
     }
   }

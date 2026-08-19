@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/auth.dart';
+import '../services/socket_service.dart';
 import 'home.dart';
 
 class RegisterPage extends StatefulWidget {
@@ -18,20 +19,27 @@ class _RegisterPageState extends State<RegisterPage> {
 
   void createAccount() async {
 
-    bool ok = await AuthService.register(
+    String result = await AuthService.register(
       idController.text,
       passController.text,
     );
 
-    if (ok) {
+    if (result == "REGISTER_OK") {
 
       if (!mounted) return;
+
+        final socket = SocketService();
+
+        socket.connect(
+          idController.text,
+        );
 
       Navigator.push(
         context,
         MaterialPageRoute(
           builder: (_) => HomePage(
             id: idController.text,
+              socket: socket,
           ),
         ),
       );
@@ -39,7 +47,9 @@ class _RegisterPageState extends State<RegisterPage> {
     } else {
 
       setState(() {
-        message = "المستخدم موجود بالفعل";
+        message = result == "USER_EXISTS"
+            ? "المستخدم موجود بالفعل"
+            : "حدث خطأ في الاتصال";
       });
 
     }

@@ -16,7 +16,6 @@ import com.cncall.socket.CallSocketManager
 import io.ktor.http.*
 import kotlinx.serialization.Serializable
 import io.ktor.server.plugins.contentnegotiation.*
-import io.ktor.server.plugins.cors.routing.*
 import io.ktor.serialization.kotlinx.json.*
 
 
@@ -34,12 +33,6 @@ fun main(){
         port = 8080,
         host = "0.0.0.0"
     ){
-
-        install(CORS){
-    anyHost()
-    allowHeader("Content-Type")
-    allowMethod(io.ktor.http.HttpMethod.Post)
-}
 
         install(ContentNegotiation){
             json()
@@ -91,48 +84,6 @@ fun main(){
                                 CallSocketManager.sendTo(
                                     target,
                                     "INCOMING_CALL:$id"
-                                )
-
-                            }
-
-
-                            if(text.startsWith("ACCEPT_CALL:")){
-
-                                val caller =
-                                    text.removePrefix("ACCEPT_CALL:")
-
-
-                                CallSocketManager.sendTo(
-                                    caller,
-                                    "CALL_ACCEPTED:$id"
-                                )
-
-                            }
-
-
-                            if(text.startsWith("ACCEPT_CALL:")){
-
-                                val caller =
-                                    text.removePrefix("ACCEPT_CALL:")
-
-
-                                CallSocketManager.sendTo(
-                                    caller,
-                                    "CALL_ACCEPTED:$id"
-                                )
-
-                            }
-
-
-                            if(text.startsWith("REJECT_CALL:")){
-
-                                val caller =
-                                    text.removePrefix("REJECT_CALL:")
-
-
-                                CallSocketManager.sendTo(
-                                    caller,
-                                    "CALL_REJECTED:$id"
                                 )
 
                             }

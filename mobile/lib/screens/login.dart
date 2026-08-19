@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import '../services/auth.dart';
+import '../services/socket_service.dart';
 import 'home.dart';
+import 'call.dart';
 import 'register.dart';
+import 'incoming_call.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
@@ -21,7 +24,7 @@ class _LoginPageState extends State<LoginPage> {
 
   void login() async {
 
-    bool ok = await AuthService.login(
+    String result = await AuthService.login(
       idController.text,
       passController.text,
     );
@@ -30,13 +33,72 @@ class _LoginPageState extends State<LoginPage> {
     if (!mounted) return;
 
 
-    if(ok){
+    if(result == "LOGIN_OK"){
+
+      final socket = SocketService();
+
+      socket.connect(
+        idController.text,
+      );
+
+
+      socket.messages.listen((message){
+
+        if(message.toString().startsWith("CALL_ACCEPTED:")){
+
+          final userId =
+              message.toString().replaceFirst(
+                "CALL_ACCEPTED:",
+                "",
+              );
+
+          if(!mounted) return;
+
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => CallScreen(
+                userId: userId,
+              ),
+            ),
+          );
+
+        }
+
+
+        if(message.toString().startsWith("INCOMING_CALL:")){
+
+          final callerId =
+              message.toString().replaceFirst(
+                "INCOMING_CALL:",
+                "",
+              );
+
+
+          if(!mounted) return;
+
+
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => IncomingCallScreen(
+                callerId: callerId,
+                  socket: socket,
+              ),
+            ),
+          );
+
+        }
+
+      });
+
 
       Navigator.push(
         context,
         MaterialPageRoute(
           builder: (_) => HomePage(
             id: idController.text,
+            socket: socket,
           ),
         ),
       );

@@ -95,48 +95,6 @@ fun main(){
 
                             }
 
-
-                            if(text.startsWith("ACCEPT_CALL:")){
-
-                                val caller =
-                                    text.removePrefix("ACCEPT_CALL:")
-
-
-                                CallSocketManager.sendTo(
-                                    caller,
-                                    "CALL_ACCEPTED:$id"
-                                )
-
-                            }
-
-
-                            if(text.startsWith("ACCEPT_CALL:")){
-
-                                val caller =
-                                    text.removePrefix("ACCEPT_CALL:")
-
-
-                                CallSocketManager.sendTo(
-                                    caller,
-                                    "CALL_ACCEPTED:$id"
-                                )
-
-                            }
-
-
-                            if(text.startsWith("REJECT_CALL:")){
-
-                                val caller =
-                                    text.removePrefix("REJECT_CALL:")
-
-
-                                CallSocketManager.sendTo(
-                                    caller,
-                                    "CALL_REJECTED:$id"
-                                )
-
-                            }
-
                         }
 
                     }
