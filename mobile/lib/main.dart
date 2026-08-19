@@ -1,5 +1,6 @@
 
 import 'package:flutter/material.dart';
+import 'screens/register.dart';
 
 void main() {
   runApp(const CNCallApp());
@@ -75,7 +76,14 @@ class LoginPage extends StatelessWidget {
               ),
 
               ElevatedButton(
-                onPressed: () {},
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const RegisterPage(),
+                    ),
+                  );
+                },
                 child: const Text('إنشاء حساب'),
               ),
             ],

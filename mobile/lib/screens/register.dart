@@ -1,0 +1,93 @@
+import 'package:flutter/material.dart';
+import '../services/auth.dart';
+import 'home.dart';
+
+class RegisterPage extends StatefulWidget {
+  const RegisterPage({super.key});
+
+  @override
+  State<RegisterPage> createState() => _RegisterPageState();
+}
+
+class _RegisterPageState extends State<RegisterPage> {
+
+  final idController = TextEditingController();
+  final passController = TextEditingController();
+
+  String message = "";
+
+  void createAccount() {
+
+    bool ok = AuthService.register(
+      idController.text,
+      passController.text,
+    );
+
+    if (ok) {
+
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => HomePage(
+            id: idController.text,
+          ),
+        ),
+      );
+
+    } else {
+
+      setState(() {
+        message = "المستخدم موجود بالفعل";
+      });
+
+    }
+  }
+
+
+  @override
+  Widget build(BuildContext context) {
+
+    return Scaffold(
+
+      appBar: AppBar(
+        title: const Text("إنشاء حساب"),
+      ),
+
+      body: Padding(
+
+        padding: const EdgeInsets.all(30),
+
+        child: Column(
+
+          children: [
+
+            TextField(
+              controller: idController,
+              decoration: const InputDecoration(
+                labelText: "رقم المستخدم",
+              ),
+            ),
+
+            TextField(
+              controller: passController,
+              obscureText: true,
+              decoration: const InputDecoration(
+                labelText: "كلمة السر",
+              ),
+            ),
+
+            const SizedBox(height:30),
+
+            ElevatedButton(
+              onPressed: createAccount,
+              child: const Text("إنشاء"),
+            ),
+
+            Text(message)
+
+          ],
+        ),
+      ),
+    );
+  }
+}
