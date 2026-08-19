@@ -1,17 +1,44 @@
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+
 class AuthService {
 
-  static final Map<String, String> users = {};
+  static const String baseUrl = "http://localhost:8080";
 
-  static bool register(String id, String password) {
-    if (users.containsKey(id)) {
-      return false;
-    }
 
-    users[id] = password;
-    return true;
+  static Future<bool> register(String id, String password) async {
+
+    final response = await http.post(
+      Uri.parse("$baseUrl/register"),
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: jsonEncode({
+        "id": id,
+        "password": password,
+      }),
+    );
+
+    return response.statusCode == 200;
   }
 
-  static bool login(String id, String password) {
-    return users[id] == password;
+
+
+  static Future<bool> login(String id, String password) async {
+
+    final response = await http.post(
+      Uri.parse("$baseUrl/login"),
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: jsonEncode({
+        "id": id,
+        "password": password,
+      }),
+    );
+
+
+    return response.body == "LOGIN_OK";
   }
+
 }

@@ -16,14 +16,16 @@ class _RegisterPageState extends State<RegisterPage> {
 
   String message = "";
 
-  void createAccount() {
+  void createAccount() async {
 
-    bool ok = AuthService.register(
+    bool ok = await AuthService.register(
       idController.text,
       passController.text,
     );
 
     if (ok) {
+
+      if (!mounted) return;
 
       Navigator.push(
         context,
