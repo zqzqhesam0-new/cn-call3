@@ -1,27 +1,76 @@
 package com.cncall.data
 
 import com.cncall.model.User
+import java.sql.DriverManager
 
 object UserStore {
 
-    private val users = mutableListOf<User>()
+    private const val DB_URL = "jdbc:sqlite:users.db"
 
-    fun register(user: User): Boolean {
+    init {
+        Class.forName("org.sqlite.JDBC")
 
-        if(users.any { it.id == user.id }){
-            return false
+        DriverManager.getConnection(DB_URL).use { conn ->
+            conn.createStatement().use { stmt ->
+                stmt.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS users (
+                        id TEXT PRIMARY KEY,
+                        password TEXT NOT NULL
+                    )
+                    """.trimIndent()
+                )
+            }
         }
-
-        users.add(user)
-        return true
     }
 
 
-    fun login(id:String,password:String):Boolean{
+    fun register(user: User): Boolean {
 
-        return users.any {
-            it.id == id && it.password == password
+        DriverManager.getConnection(DB_URL).use { conn ->
+
+            val check = conn.prepareStatement(
+                "SELECT id FROM users WHERE id = ?"
+            )
+
+            check.setString(1, user.id)
+
+            val result = check.executeQuery()
+
+            if (result.next()) {
+                return false
+            }
+
+
+            val insert = conn.prepareStatement(
+                "INSERT INTO users(id,password) VALUES(?,?)"
+            )
+
+            insert.setString(1, user.id)
+            insert.setString(2, user.password)
+
+            insert.executeUpdate()
+
+            return true
         }
+    }
 
+
+
+    fun login(id:String, password:String):Boolean {
+
+        DriverManager.getConnection(DB_URL).use { conn ->
+
+            val stmt = conn.prepareStatement(
+                "SELECT id FROM users WHERE id=? AND password=?"
+            )
+
+            stmt.setString(1, id)
+            stmt.setString(2, password)
+
+            val result = stmt.executeQuery()
+
+            return result.next()
+        }
     }
 }
