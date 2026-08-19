@@ -3,7 +3,7 @@ import 'package:http/http.dart' as http;
 
 class AuthService {
 
-  static const String baseUrl = "http://localhost:8080";
+  static const String baseUrl = "https://ubiquitous-acorn-x9wwxwr9x4rcvq57-8080.app.github.dev";
 
 
   static Future<bool> register(String id, String password) async {
