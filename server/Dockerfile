@@ -8,7 +8,7 @@ RUN chmod +x gradlew
 
 RUN echo "org.gradle.java.home=/opt/java/openjdk" > /tmp/gradle.properties
 
-RUN ./gradlew build --no-daemon --gradle-user-home /tmp
+RUN ./gradlew shadowJar --no-daemon --gradle-user-home /tmp
 
 EXPOSE 8080
 
