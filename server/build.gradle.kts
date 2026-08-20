@@ -2,6 +2,7 @@ plugins {
     kotlin("jvm") version "2.1.0"
     kotlin("plugin.serialization") version "2.1.0"
     application
+    id("com.github.johnrengelman.shadow") version "8.1.1"
 }
 
 repositories {
@@ -29,4 +30,17 @@ tasks.jar {
     manifest {
         attributes["Main-Class"] = "com.cncall.ApplicationKt"
     }
+}
+
+
+tasks.shadowJar {
+    archiveBaseName.set("cn-call-server")
+    archiveClassifier.set("")
+    manifest {
+        attributes["Main-Class"] = "com.cncall.ApplicationKt"
+    }
+}
+
+tasks.build {
+    dependsOn(tasks.shadowJar)
 }
