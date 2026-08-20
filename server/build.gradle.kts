@@ -23,3 +23,10 @@ dependencies {
 application {
     mainClass.set("com.cncall.ApplicationKt")
 }
+
+
+tasks.jar {
+    manifest {
+        attributes["Main-Class"] = "com.cncall.ApplicationKt"
+    }
+}
