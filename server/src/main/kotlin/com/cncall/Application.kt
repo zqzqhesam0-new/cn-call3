@@ -32,7 +32,7 @@ fun main(){
 
     embeddedServer(
         Netty,
-        port = 8080,
+        port = System.getenv("PORT")?.toInt() ?: 8080,
         host = "0.0.0.0"
     ){
 
@@ -122,9 +122,17 @@ fun main(){
                                 val target =
                                     text.removePrefix("END_CALL:")
 
+                                // Notify the remote party
                                 CallSocketManager.sendTo(
                                     target,
                                     "CALL_ENDED:$id"
+                                )
+
+                                // Also notify the caller/local party so both sides
+                                // leave the call screen and clean up WebRTC.
+                                CallSocketManager.sendTo(
+                                    id,
+                                    "CALL_ENDED:$target"
                                 )
 
                             }
@@ -175,18 +183,22 @@ fun main(){
                             }
 
 
-                            if(text.startsWith("REJECT_CALL:")){
+                              if(text.startsWith("REJECT_CALL:")){
 
-                                val caller =
-                                    text.removePrefix("REJECT_CALL:")
+                                  val caller =
+                                      text.removePrefix("REJECT_CALL:")
 
+                                  CallSocketManager.sendTo(
+                                      caller,
+                                      "CALL_REJECTED:$id"
+                                  )
 
-                                CallSocketManager.sendTo(
-                                    caller,
-                                    "CALL_REJECTED:$id"
-                                )
+                                  CallSocketManager.sendTo(
+                                      id,
+                                      "CALL_ENDED:$caller"
+                                  )
 
-                            }
+                              }
 
                         }
 
