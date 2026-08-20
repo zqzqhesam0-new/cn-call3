@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/socket_service.dart';
+import 'call.dart';
 
 
 class IncomingCallScreen extends StatelessWidget {
@@ -152,6 +153,8 @@ class IncomingCallScreen extends StatelessWidget {
 
                     onPressed:(){
 
+                      socket.rejectCall(callerId);
+
                       Navigator.pop(context);
 
                     },
@@ -181,11 +184,20 @@ class IncomingCallScreen extends StatelessWidget {
 
                     onPressed:(){
 
-                      socket.acceptCall(
+                        socket.acceptCall(
                         callerId,
                       );
 
-                      Navigator.pop(context);
+                      Navigator.pushReplacement(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => CallScreen(
+                            userId: callerId,
+                              socket: socket,
+                              isCaller: false,
+                          ),
+                        ),
+                      );
 
                     },
 

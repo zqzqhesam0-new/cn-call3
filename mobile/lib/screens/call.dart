@@ -1,12 +1,17 @@
 import 'package:flutter/material.dart';
+import '../services/socket_service.dart';
 
 class CallScreen extends StatefulWidget {
 
   final String userId;
+  final SocketService socket;
+  final bool isCaller;
 
   const CallScreen({
     super.key,
     required this.userId,
+    required this.socket,
+    required this.isCaller,
   });
 
 

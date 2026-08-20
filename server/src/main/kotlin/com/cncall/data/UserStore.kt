@@ -12,18 +12,27 @@ object UserStore {
 
         DriverManager.getConnection(DB_URL).use { conn ->
             conn.createStatement().use { stmt ->
+
                 stmt.execute(
                     """
                     CREATE TABLE IF NOT EXISTS users (
                         id TEXT PRIMARY KEY,
-                        password TEXT NOT NULL
+                        password TEXT NOT NULL,
+                        display_name TEXT NOT NULL DEFAULT ''
                     )
                     """.trimIndent()
                 )
+
+                try {
+                    stmt.execute(
+                        "ALTER TABLE users ADD COLUMN display_name TEXT NOT NULL DEFAULT ''"
+                    )
+                } catch (_: Exception) {
+                    // العمود موجود بالفعل
+                }
             }
         }
     }
-
 
     fun register(user: User): Boolean {
 
@@ -41,13 +50,16 @@ object UserStore {
                 return false
             }
 
-
             val insert = conn.prepareStatement(
-                "INSERT INTO users(id,password) VALUES(?,?)"
+                """
+                INSERT INTO users(id,password,display_name)
+                VALUES(?,?,?)
+                """.trimIndent()
             )
 
             insert.setString(1, user.id)
             insert.setString(2, user.password)
+            insert.setString(3, user.displayName)
 
             insert.executeUpdate()
 
@@ -55,9 +67,7 @@ object UserStore {
         }
     }
 
-
-
-    fun login(id:String, password:String):Boolean {
+    fun login(id: String, password: String): Boolean {
 
         DriverManager.getConnection(DB_URL).use { conn ->
 
@@ -71,6 +81,26 @@ object UserStore {
             val result = stmt.executeQuery()
 
             return result.next()
+        }
+    }
+
+    fun getDisplayName(id: String): String {
+
+        DriverManager.getConnection(DB_URL).use { conn ->
+
+            val stmt = conn.prepareStatement(
+                "SELECT display_name FROM users WHERE id=?"
+            )
+
+            stmt.setString(1, id)
+
+            val result = stmt.executeQuery()
+
+            return if (result.next()) {
+                result.getString("display_name") ?: id
+            } else {
+                id
+            }
         }
     }
 }

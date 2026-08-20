@@ -1,15 +1,21 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../widgets/call_button.dart';
+import '../services/socket_service.dart';
+import '../services/webrtc_service.dart';
 
 
 class CallScreen extends StatefulWidget {
 
   final String userId;
+  final SocketService socket;
+  final bool isCaller;
 
   const CallScreen({
     super.key,
     required this.userId,
+    required this.socket,
+    required this.isCaller,
   });
 
 
@@ -25,10 +31,79 @@ class _CallScreenState extends State<CallScreen> {
   int seconds = 0;
   Timer? timer;
 
+  WebRTCService? webrtc;
+  StreamSubscription? subscription;
+
 
   @override
   void initState() {
     super.initState();
+
+    webrtc = WebRTCService(
+      widget.socket,
+      widget.userId,
+    );
+
+    webrtc!.initialize().then((_) {
+
+      if(widget.isCaller){
+        webrtc!.createOffer();
+      }
+
+    });
+
+
+    subscription = widget.socket.messages.listen((message){
+
+      final text = message.toString();
+
+      if(text.startsWith("CALL_ENDED:")){
+
+        if(mounted){
+          widget.socket.endCall(widget.userId);
+                    Navigator.pop(context);
+        }
+
+        return;
+      }
+
+
+
+      if(text.startsWith("OFFER:")){
+
+        final parts = text.split(":");
+
+        webrtc!.createAnswer(
+          parts[2],
+        );
+
+      }
+
+
+      if(text.startsWith("ANSWER:")){
+
+        final parts = text.split(":");
+
+        webrtc!.setAnswer(
+          parts[2],
+        );
+
+      }
+
+
+      if(text.startsWith("ICE:")){
+
+        final parts = text.split(":");
+
+        webrtc!.addIce(
+          parts[2],
+        );
+
+      }
+
+    });
+
+
 
     timer = Timer.periodic(
       const Duration(seconds: 1),
@@ -48,6 +123,10 @@ class _CallScreenState extends State<CallScreen> {
   void dispose() {
 
     timer?.cancel();
+
+    subscription?.cancel();
+
+    webrtc?.close();
 
     super.dispose();
   }
@@ -257,6 +336,14 @@ class _CallScreenState extends State<CallScreen> {
 
 
                       onPressed:(){
+
+                        widget.socket.close();
+
+                        webrtc?.close();
+
+                        subscription?.cancel();
+
+                        timer?.cancel();
 
                         Navigator.pop(context);
 

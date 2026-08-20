@@ -1,190 +1,111 @@
 import 'package:flutter/material.dart';
 import '../services/socket_service.dart';
-import 'call.dart';
-
+import 'call_screen.dart';
 
 class IncomingCallScreen extends StatelessWidget {
-
   final String callerId;
+  final String callerName;
   final SocketService socket;
-
 
   const IncomingCallScreen({
     super.key,
     required this.callerId,
+    required this.callerName,
     required this.socket,
   });
 
-
-
   @override
-  Widget build(BuildContext context){
-
+  Widget build(BuildContext context) {
     return Scaffold(
-
       backgroundColor: Colors.black,
-
-
       body: SafeArea(
-
         child: Column(
-
-          mainAxisAlignment:
-              MainAxisAlignment.spaceBetween,
-
-
           children: [
+            const SizedBox(height: 55),
 
-
-            const SizedBox(height:50),
-
-
-
-            Column(
-
-              children: [
-
-
-                CircleAvatar(
-
-                  radius:75,
-
-                  backgroundColor:
-                      Colors.grey.shade800,
-
-
-                  child: const Icon(
-
-                    Icons.person,
-
-                    size:90,
-
-                    color:Colors.white,
-
-                  ),
-
-                ),
-
-
-
-                const SizedBox(height:30),
-
-
-
-                Text(
-
-                  callerId,
-
-                  style: const TextStyle(
-
-                    color:Colors.white,
-
-                    fontSize:32,
-
-                    fontWeight:
-                        FontWeight.bold,
-
-                  ),
-
-                ),
-
-
-
-                const SizedBox(height:15),
-
-
-
-                const Text(
-
-                  "مكالمة واردة",
-
-                  style: TextStyle(
-
-                    color:Colors.white70,
-
-                    fontSize:20,
-
-                  ),
-
-                ),
-
-
-              ],
-
+            const Text(
+              "مكالمة واردة",
+              style: TextStyle(
+                color: Colors.white70,
+                fontSize: 17,
+              ),
             ),
 
+            const Spacer(),
 
+            Container(
+              width: 145,
+              height: 145,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: const Color(0xff252525),
+                border: Border.all(
+                  color: Colors.white12,
+                  width: 1,
+                ),
+              ),
+              child: const Icon(
+                Icons.person,
+                size: 88,
+                color: Colors.white70,
+              ),
+            ),
 
+            const SizedBox(height: 28),
+
+            Text(
+              callerName.isEmpty ? callerId : callerName,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 31,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+
+            const SizedBox(height: 8),
+
+            Text(
+              callerId,
+              style: const TextStyle(
+                color: Colors.white54,
+                fontSize: 18,
+              ),
+            ),
+
+            const Spacer(),
+
+            const Text(
+              "مكالمة صوتية",
+              style: TextStyle(
+                color: Colors.white38,
+                fontSize: 15,
+              ),
+            ),
+
+            const SizedBox(height: 30),
 
             Padding(
-
-              padding:
-                  const EdgeInsets.only(
-                    bottom:50,
-                  ),
-
-
+              padding: const EdgeInsets.symmetric(horizontal: 55),
               child: Row(
-
-                mainAxisAlignment:
-                    MainAxisAlignment.spaceEvenly,
-
-
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-
-
-
-                  FloatingActionButton(
-
-                    heroTag:"reject",
-
-                    backgroundColor:
-                        Colors.red,
-
-
-                    child: const Icon(
-
-                      Icons.call_end,
-
-                      color:Colors.white,
-
-                    ),
-
-
-                    onPressed:(){
-
+                  _CallAction(
+                    icon: Icons.call_end,
+                    label: "رفض",
+                    color: Colors.red,
+                    onTap: () {
+                      socket.rejectCall(callerId);
                       Navigator.pop(context);
-
                     },
-
                   ),
 
-
-
-
-
-                  FloatingActionButton(
-
-                    heroTag:"accept",
-
-                    backgroundColor:
-                        Colors.green,
-
-
-                    child: const Icon(
-
-                      Icons.call,
-
-                      color:Colors.white,
-
-                    ),
-
-
-                    onPressed:(){
-
-                        socket.acceptCall(
-                        callerId,
-                      );
+                  _CallAction(
+                    icon: Icons.call,
+                    label: "قبول",
+                    color: Colors.green,
+                    onTap: () {
+                      socket.acceptCall(callerId);
 
                       Navigator.pushReplacement(
                         context,
@@ -194,31 +115,62 @@ class IncomingCallScreen extends StatelessWidget {
                           ),
                         ),
                       );
-
                     },
-
                   ),
-
-
-
                 ],
-
               ),
+            ),
 
-            )
-
-
-
+            const SizedBox(height: 48),
           ],
-
-
         ),
-
       ),
-
     );
-
   }
+}
 
+class _CallAction extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
 
+  const _CallAction({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        GestureDetector(
+          onTap: onTap,
+          child: Container(
+            width: 70,
+            height: 70,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: color,
+            ),
+            child: Icon(
+              icon,
+              color: Colors.white,
+              size: 34,
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+        Text(
+          label,
+          style: const TextStyle(
+            color: Colors.white70,
+            fontSize: 15,
+          ),
+        ),
+      ],
+    );
+  }
 }

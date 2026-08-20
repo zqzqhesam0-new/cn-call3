@@ -23,7 +23,8 @@ import io.ktor.serialization.kotlinx.json.*
 @Serializable
 data class AuthRequest(
     val id:String,
-    val password:String
+    val password:String,
+    val displayName:String = ""
 )
 
 
@@ -88,9 +89,12 @@ fun main(){
                                     text.removePrefix("CALL_REQUEST:")
 
 
+                                val displayName =
+                                    UserStore.getDisplayName(id)
+
                                 CallSocketManager.sendTo(
                                     target,
-                                    "INCOMING_CALL:$id"
+                                    "INCOMING_CALL:$id:$displayName"
                                 )
 
                             }
@@ -102,23 +106,70 @@ fun main(){
                                     text.removePrefix("ACCEPT_CALL:")
 
 
+                                val displayName =
+                                    UserStore.getDisplayName(id)
+
                                 CallSocketManager.sendTo(
                                     caller,
-                                    "CALL_ACCEPTED:$id"
+                                    "CALL_ACCEPTED:$id:$displayName"
                                 )
 
                             }
 
 
-                            if(text.startsWith("ACCEPT_CALL:")){
+                            if(text.startsWith("END_CALL:")){
 
-                                val caller =
-                                    text.removePrefix("ACCEPT_CALL:")
-
+                                val target =
+                                    text.removePrefix("END_CALL:")
 
                                 CallSocketManager.sendTo(
-                                    caller,
-                                    "CALL_ACCEPTED:$id"
+                                    target,
+                                    "CALL_ENDED:$id"
+                                )
+
+                            }
+
+
+                            if(text.startsWith("OFFER:")){
+
+                                val parts = text.split(":", limit = 3)
+
+                                val target = parts[1]
+                                val offer = parts[2]
+
+                                CallSocketManager.sendTo(
+                                    target,
+                                    "OFFER:$id:$offer"
+                                )
+
+                            }
+
+
+                            if(text.startsWith("ANSWER:")){
+
+                                val parts = text.split(":", limit = 3)
+
+                                val target = parts[1]
+                                val answer = parts[2]
+
+                                CallSocketManager.sendTo(
+                                    target,
+                                    "ANSWER:$id:$answer"
+                                )
+
+                            }
+
+
+                            if(text.startsWith("ICE:")){
+
+                                val parts = text.split(":", limit = 3)
+
+                                val target = parts[1]
+                                val ice = parts[2]
+
+                                CallSocketManager.sendTo(
+                                    target,
+                                    "ICE:$id:$ice"
                                 )
 
                             }
@@ -160,7 +211,8 @@ fun main(){
                 val result = UserStore.register(
                     User(
                         request.id,
-                        request.password
+                        request.password,
+                        request.displayName.ifBlank { request.id }
                     )
                 )
 
@@ -189,7 +241,12 @@ fun main(){
 
 
                 if(result){
-                    call.respondText("LOGIN_OK")
+                    val displayName =
+                        UserStore.getDisplayName(request.id)
+
+                    call.respondText(
+                        "LOGIN_OK:$displayName"
+                    )
                 }else{
                     call.respondText(
                         "LOGIN_FAILED",
