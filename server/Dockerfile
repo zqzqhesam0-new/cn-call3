@@ -12,4 +12,4 @@ RUN ./gradlew build --no-daemon --gradle-user-home /tmp
 
 EXPOSE 8080
 
-CMD ["./gradlew", "run"]
+CMD ["java", "-jar", "build/libs/cn-call-server.jar"]
