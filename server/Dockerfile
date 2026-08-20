@@ -6,7 +6,9 @@ COPY . .
 
 RUN chmod +x gradlew
 
-RUN env -u GRADLE_OPTS -u JAVA_HOME ./gradlew build
+RUN echo "org.gradle.java.home=/opt/java/openjdk" > /tmp/gradle.properties
+
+RUN ./gradlew build --no-daemon --gradle-user-home /tmp
 
 EXPOSE 8080
 
