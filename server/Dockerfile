@@ -5,7 +5,8 @@ WORKDIR /app
 COPY . .
 
 RUN chmod +x gradlew
-RUN ./gradlew build
+
+RUN ./gradlew build -Dorg.gradle.java.home=
 
 EXPOSE 8080
 
