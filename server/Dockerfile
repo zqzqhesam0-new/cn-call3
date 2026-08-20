@@ -6,7 +6,7 @@ COPY . .
 
 RUN chmod +x gradlew
 
-RUN ./gradlew build
+RUN env -u GRADLE_OPTS -u JAVA_HOME ./gradlew build
 
 EXPOSE 8080
 
