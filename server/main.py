@@ -71,11 +71,35 @@ def init_db():
         """
     )
 
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS fcm_tokens (
+            user_id TEXT PRIMARY KEY,
+            token TEXT NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
     db.commit()
     db.close()
 
 
 init_db()
+
+
+def load_fcm_tokens():
+    db = get_db()
+    rows = db.execute(
+        "SELECT user_id, token FROM fcm_tokens"
+    ).fetchall()
+    db.close()
+
+    for row in rows:
+        FCM_TOKENS[row["user_id"]] = row["token"]
+
+
+load_fcm_tokens()
 
 
 # ============================================================
@@ -155,6 +179,21 @@ async def save_fcm_token(request: FcmTokenRequest):
 
     FCM_TOKENS[user_id] = token
 
+    db = get_db()
+    db.execute(
+        """
+        INSERT INTO fcm_tokens (user_id, token, updated_at)
+        VALUES (?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(user_id)
+        DO UPDATE SET
+            token=excluded.token,
+            updated_at=CURRENT_TIMESTAMP
+        """,
+        (user_id, token),
+    )
+    db.commit()
+    db.close()
+
     return {
         "success": True,
         "message": "تم حفظ FCM Token",
@@ -172,6 +211,14 @@ async def root():
         "status": "online",
     }
 
+
+
+
+@app.get("/fcm-debug")
+def fcm_debug():
+    return {
+        "memory": FCM_TOKENS,
+    }
 
 @app.get("/health")
 async def health():
@@ -361,6 +408,18 @@ def send_call_notification(
     caller_name: str,
 ):
     token = FCM_TOKENS.get(target_id)
+
+    if not token:
+        db = get_db()
+        row = db.execute(
+            "SELECT token FROM fcm_tokens WHERE user_id = ?",
+            (target_id,),
+        ).fetchone()
+        db.close()
+
+        if row:
+            token = row["token"]
+            FCM_TOKENS[target_id] = token
 
     if not token:
         return
