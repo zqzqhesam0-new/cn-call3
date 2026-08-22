@@ -8,6 +8,9 @@ import os
 import re
 import sqlite3
 
+import firebase_admin
+from firebase_admin import credentials, messaging
+
 
 app = FastAPI(title="CN CALL Server")
 
@@ -23,7 +26,24 @@ app.add_middleware(
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "cn_call.db"
 
+
 connections: dict[str, WebSocket] = {}
+
+FCM_TOKENS: dict[str, str] = {}
+
+firebase_key = BASE_DIR / "secrets" / "firebase-service-account.json"
+firebase_json = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
+
+if not firebase_admin._apps:
+    if firebase_json:
+        cred = credentials.Certificate(
+            __import__("json").loads(firebase_json)
+        )
+        firebase_admin.initialize_app(cred)
+    elif firebase_key.exists():
+        cred = credentials.Certificate(str(firebase_key))
+        firebase_admin.initialize_app(cred)
+
 
 
 # ============================================================
@@ -110,6 +130,35 @@ class RegisterRequest(BaseModel):
 class LoginRequest(BaseModel):
     user_id: str
     password: str
+
+
+class FcmTokenRequest(BaseModel):
+    user_id: str
+    token: str
+
+
+
+# ============================================================
+# FCM TOKEN
+# ============================================================
+
+@app.post("/fcm-token")
+async def save_fcm_token(request: FcmTokenRequest):
+    user_id = request.user_id.strip()
+    token = request.token.strip()
+
+    if not user_id or not token:
+        return {
+            "success": False,
+            "message": "بيانات FCM غير صالحة",
+        }
+
+    FCM_TOKENS[user_id] = token
+
+    return {
+        "success": True,
+        "message": "تم حفظ FCM Token",
+    }
 
 
 # ============================================================
@@ -301,6 +350,51 @@ async def get_user(user_id: str):
     }
 
 
+
+# ============================================================
+# FCM NOTIFICATIONS
+# ============================================================
+
+def send_call_notification(
+    target_id: str,
+    caller_id: str,
+    caller_name: str,
+):
+    token = FCM_TOKENS.get(target_id)
+
+    if not token:
+        return
+
+    if not firebase_admin._apps:
+        return
+
+    try:
+        message = messaging.Message(
+            token=token,
+            notification=messaging.Notification(
+                title="CN CALL",
+                body=f"مكالمة واردة من {caller_name}",
+            ),
+            data={
+                "type": "incoming_call",
+                "caller_id": caller_id,
+                "caller_name": caller_name,
+            },
+            android=messaging.AndroidConfig(
+                priority="high",
+                notification=messaging.AndroidNotification(
+                    channel_id="cn_call_calls",
+                    sound="default",
+                ),
+            ),
+        )
+
+        messaging.send(message)
+
+    except Exception as e:
+        print(f"FCM send error: {e}")
+
+
 # ============================================================
 # WEBSOCKET / CALLS
 # ============================================================
@@ -340,6 +434,20 @@ async def websocket_endpoint(
                     **message,
                     "from_id": user_id,
                 })
+
+            if (
+                message.get("type") == "call"
+                and target_id
+            ):
+                caller_name = str(
+                    message.get("caller_name", "مستخدم CN CALL")
+                )
+
+                send_call_notification(
+                    target_id=target_id,
+                    caller_id=user_id,
+                    caller_name=caller_name,
+                )
 
     except WebSocketDisconnect:
         pass
