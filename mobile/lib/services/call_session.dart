@@ -1,0 +1,78 @@
+import 'dart:async';
+
+import 'package:shared_preferences/shared_preferences.dart';
+
+import 'call_socket.dart';
+
+class CallSession {
+  CallSession._();
+
+  static final CallSession instance = CallSession._();
+
+  final CallSocket socket = CallSocket();
+
+  final StreamController<Map<String, dynamic>> _incomingCalls =
+      StreamController<Map<String, dynamic>>.broadcast();
+
+  Stream<Map<String, dynamic>> get incomingCalls => _incomingCalls.stream;
+
+  StreamSubscription<Map<String, dynamic>>? _messageSubscription;
+
+  String? userId;
+  String? displayName;
+
+  bool get loggedIn => userId != null;
+
+  Future<void> login({
+    required String id,
+    required String name,
+  }) async {
+    userId = id;
+    displayName = name;
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('cn_call_user_id', id);
+    await prefs.setString('cn_call_display_name', name);
+
+    socket.connect(id);
+
+    // استقبال رسائل المكالمات يتم الآن بواسطة RtcCallManager.
+  }
+
+  Future<bool> restoreSession() async {
+    final prefs = await SharedPreferences.getInstance();
+
+    final id = prefs.getString('cn_call_user_id');
+    final name = prefs.getString('cn_call_display_name');
+
+    if (id == null || id.isEmpty || name == null || name.isEmpty) {
+      return false;
+    }
+
+    userId = id;
+    displayName = name;
+
+    socket.connect(id);
+
+    // استقبال رسائل المكالمات يتم الآن بواسطة RtcCallManager.
+
+    return true;
+  }
+
+  Future<void> logout() async {
+    await _messageSubscription?.cancel();
+    _messageSubscription = null;
+    socket.disconnect();
+
+    userId = null;
+    displayName = null;
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('cn_call_user_id');
+    await prefs.remove('cn_call_display_name');
+  }
+
+  Future<void> dispose() async {
+    socket.disconnect();
+  }
+}

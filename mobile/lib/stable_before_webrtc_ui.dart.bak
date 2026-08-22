@@ -1,0 +1,1887 @@
+import 'dart:async';
+import 'package:flutter/material.dart';
+
+import 'services/call_session.dart';
+void main() {
+  runApp(const CNCallApp());
+}
+
+class CNCallApp extends StatelessWidget {
+  const CNCallApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      title: 'CN CALL',
+      theme: ThemeData(
+        brightness: Brightness.dark,
+        scaffoldBackgroundColor: const Color(0xFF050505),
+        useMaterial3: true,
+      ),
+      home: const LoginScreen(),
+    );
+  }
+}
+
+// ============================================================
+// LOGIN
+// ============================================================
+
+class LoginScreen extends StatefulWidget {
+  const LoginScreen({super.key});
+
+  @override
+  State<LoginScreen> createState() => _LoginScreenState();
+}
+
+class _LoginScreenState extends State<LoginScreen> {
+  final userIdController = TextEditingController();
+  final passwordController = TextEditingController();
+
+  bool hidePassword = true;
+
+  @override
+  void dispose() {
+    userIdController.dispose();
+    passwordController.dispose();
+    super.dispose();
+  }
+
+  void openRegister() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const RegisterScreen(),
+      ),
+    );
+  }
+
+  void login() {
+    final userId = userIdController.text.trim();
+    final password = passwordController.text;
+
+    if (userId.isEmpty) {
+      _message('أدخل ID المستخدم');
+      return;
+    }
+
+    if (int.tryParse(userId) == null) {
+      _message('ID المستخدم يجب أن يكون أرقامًا فقط');
+      return;
+    }
+
+    if (password.isEmpty) {
+      _message('أدخل كلمة المرور');
+      return;
+    }
+
+    CallSession.instance.login(
+      id: userId,
+      name: 'Hesam',
+    );
+
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const HomeScreen(),
+      ),
+    );
+  }
+
+  void _message(String text, {bool success = false}) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(text),
+        backgroundColor:
+            success ? const Color(0xFF00A85A) : Colors.red.shade800,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: Scaffold(
+        body: SafeArea(
+          child: Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 24,
+                vertical: 40,
+              ),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 430),
+                child: Column(
+                  children: [
+                    _Logo(),
+
+                    const SizedBox(height: 24),
+
+                    const Text(
+                      'CN CALL',
+                      style: TextStyle(
+                        fontSize: 34,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 2,
+                      ),
+                    ),
+
+                    const SizedBox(height: 8),
+
+                    Text(
+                      'مكالمات صوتية بدون أرقام هاتف',
+                      style: TextStyle(
+                        color: Colors.grey.shade500,
+                        fontSize: 14,
+                      ),
+                    ),
+
+                    const SizedBox(height: 42),
+
+                    _Field(
+                      controller: userIdController,
+                      label: 'ID المستخدم',
+                      hint: 'أدخل ID المستخدم',
+                      icon: Icons.badge_outlined,
+                      keyboardType: TextInputType.number,
+                    ),
+
+                    const SizedBox(height: 16),
+
+                    _Field(
+                      controller: passwordController,
+                      label: 'كلمة المرور',
+                      hint: 'أدخل كلمة المرور',
+                      icon: Icons.lock_outline,
+                      obscureText: hidePassword,
+                      suffix: IconButton(
+                        onPressed: () {
+                          setState(() {
+                            hidePassword = !hidePassword;
+                          });
+                        },
+                        icon: Icon(
+                          hidePassword
+                              ? Icons.visibility_off
+                              : Icons.visibility,
+                        ),
+                      ),
+                    ),
+
+                    const SizedBox(height: 24),
+
+                    _PrimaryButton(
+                      text: 'تسجيل الدخول',
+                      onPressed: login,
+                    ),
+
+                    const SizedBox(height: 12),
+
+                    SizedBox(
+                      width: double.infinity,
+                      height: 52,
+                      child: OutlinedButton(
+                        onPressed: openRegister,
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.white,
+                          side: BorderSide(
+                            color: Colors.grey.shade800,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(18),
+                          ),
+                        ),
+                        child: const Text(
+                          'إنشاء حساب جديد',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ),
+
+                    const SizedBox(height: 28),
+
+                    _Footer(),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ============================================================
+// HOME
+// ============================================================
+
+class HomeScreen extends StatefulWidget {
+  const HomeScreen({super.key});
+
+  @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  final callIdController = TextEditingController();
+
+  StreamSubscription<Map<String, dynamic>>? _incomingCallSubscription;
+
+  @override
+  void initState() {
+    super.initState();
+
+    _incomingCallSubscription =
+        CallSession.instance.incomingCalls.listen((call) {
+      if (!mounted) return;
+
+      final callerId = call['from_id']?.toString() ?? '';
+      final callerName =
+          call['caller_name']?.toString() ?? 'مستخدم CN CALL';
+
+      if (callerId.isEmpty) return;
+
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => IncomingCallScreen(
+            name: callerName,
+            id: callerId,
+          ),
+        ),
+      );
+    });
+  }
+
+  @override
+  void dispose() {
+    _incomingCallSubscription?.cancel();
+    callIdController.dispose();
+    super.dispose();
+  }
+
+  void startCall() {
+    final id = callIdController.text.trim();
+
+    if (id.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('أدخل ID المستخدم الذي تريد الاتصال به'),
+        ),
+      );
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('سيتم الاتصال بالمستخدم $id'),
+        backgroundColor: const Color(0xFF00A85A),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: Scaffold(
+        backgroundColor: const Color(0xFF050505),
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          title: const Text(
+            'CN CALL',
+            style: TextStyle(
+              fontWeight: FontWeight.w800,
+              letterSpacing: 1.5,
+            ),
+          ),
+          actions: [
+            IconButton(
+              onPressed: () {},
+              icon: const Icon(Icons.settings_outlined),
+            ),
+          ],
+        ),
+        body: SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(20, 10, 20, 30),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(22),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF151515),
+                    borderRadius: BorderRadius.circular(24),
+                    border: Border.all(
+                      color: const Color(0xFF00E676).withValues(alpha: .18),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 58,
+                        height: 58,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: const Color(0xFF00E676).withValues(alpha: .12),
+                        ),
+                        child: const Icon(
+                          Icons.person,
+                          color: Color(0xFF00E676),
+                          size: 30,
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'مرحبًا بك',
+                              style: TextStyle(
+                                color: Colors.grey,
+                                fontSize: 13,
+                              ),
+                            ),
+                            SizedBox(height: 4),
+                            Text(
+                              CallSession.instance.displayName ?? 'Hesam',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 22,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                            SizedBox(height: 4),
+                            Text(
+                              'ID: ${CallSession.instance.userId ?? '100001'}',
+                              style: TextStyle(
+                                color: Color(0xFF00E676),
+                                fontSize: 13,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                const SizedBox(height: 28),
+
+                const Text(
+                  'إجراء مكالمة',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 22,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+
+                const SizedBox(height: 8),
+
+                Text(
+                  'أدخل ID المستخدم الذي تريد الاتصال به',
+                  style: TextStyle(
+                    color: Colors.grey.shade600,
+                    fontSize: 14,
+                  ),
+                ),
+
+                const SizedBox(height: 16),
+
+                _Field(
+                  controller: callIdController,
+                  label: 'ID المستخدم',
+                  hint: 'مثال: 100002',
+                  icon: Icons.badge_outlined,
+                  keyboardType: TextInputType.number,
+                ),
+
+                const SizedBox(height: 14),
+
+                _PrimaryButton(
+                  text: 'بدء المكالمة',
+                  onPressed: startCall,
+                ),
+
+                const SizedBox(height: 30),
+
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'جهات الاتصال',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    TextButton.icon(
+                      onPressed: () => _showAddContactDialog(context),
+                      icon: const Icon(Icons.person_add_alt_1, size: 18),
+                      label: const Text('إضافة'),
+                    ),
+                  ],
+                ),
+
+                const SizedBox(height: 8),
+
+                _ContactItem(
+                  name: 'أكرم العنسي',
+                  id: '100002',
+                  online: true,
+                ),
+
+                _ContactItem(
+                  name: 'لينك صخر',
+                  id: '100003',
+                  online: false,
+                ),
+
+                _ContactItem(
+                  name: 'محمد',
+                  id: '100004',
+                  online: true,
+                ),
+
+                const SizedBox(height: 24),
+
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'آخر المكالمات',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: () {},
+                      child: const Text('عرض الكل'),
+                    ),
+                  ],
+                ),
+
+                const SizedBox(height: 8),
+
+                _CallHistoryItem(
+                  name: 'أكرم العنسي',
+                  id: '100002',
+                  time: 'اليوم • 10:51 م',
+                  incoming: true,
+                ),
+
+                _CallHistoryItem(
+                  name: 'لينك صخر',
+                  id: '100003',
+                  time: 'اليوم • 8:45 م',
+                  incoming: false,
+                ),
+
+                _CallHistoryItem(
+                  name: 'محمد',
+                  id: '100004',
+                  time: 'أمس • 6:20 م',
+                  incoming: true,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+void _showAddContactDialog(BuildContext context) {
+  final controller = TextEditingController();
+
+  showDialog(
+    context: context,
+    builder: (dialogContext) {
+      return Directionality(
+        textDirection: TextDirection.rtl,
+        child: AlertDialog(
+          backgroundColor: const Color(0xFF151515),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+          ),
+          title: const Text(
+            'إضافة جهة اتصال',
+            style: TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'أدخل ID المستخدم لإضافته إلى جهات الاتصال',
+                style: TextStyle(
+                  color: Colors.grey.shade500,
+                  fontSize: 13,
+                ),
+              ),
+              const SizedBox(height: 18),
+              TextField(
+                controller: controller,
+                keyboardType: TextInputType.number,
+                textDirection: TextDirection.ltr,
+                decoration: InputDecoration(
+                  labelText: 'ID المستخدم',
+                  hintText: 'مثال: 100005',
+                  prefixIcon: const Icon(Icons.badge_outlined),
+                  filled: true,
+                  fillColor: const Color(0xFF0D0D0D),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    borderSide: BorderSide.none,
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    borderSide: const BorderSide(
+                      color: Color(0xFF00E676),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          actionsPadding: const EdgeInsets.fromLTRB(18, 0, 18, 18),
+          actions: [
+            TextButton(
+              onPressed: () {
+                controller.dispose();
+                Navigator.pop(dialogContext);
+              },
+              child: Text(
+                'إلغاء',
+                style: TextStyle(
+                  color: Colors.grey.shade500,
+                ),
+              ),
+            ),
+            FilledButton.icon(
+              onPressed: () {
+                final id = controller.text.trim();
+
+                if (id.isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('أدخل ID المستخدم'),
+                    ),
+                  );
+                  return;
+                }
+
+                if (int.tryParse(id) == null) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('ID المستخدم يجب أن يكون أرقامًا فقط'),
+                    ),
+                  );
+                  return;
+                }
+
+                controller.dispose();
+                Navigator.pop(dialogContext);
+
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      'تم إرسال طلب إضافة المستخدم $id',
+                    ),
+                    backgroundColor: const Color(0xFF00A85A),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.person_add_alt_1),
+              label: const Text('إضافة'),
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF00E676),
+                foregroundColor: Colors.black,
+              ),
+            ),
+          ],
+        ),
+      );
+    },
+  );
+}
+
+class _ContactItem extends StatelessWidget {
+  final String name;
+  final String id;
+  final bool online;
+
+  const _ContactItem({
+    required this.name,
+    required this.id,
+    required this.online,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(15),
+      decoration: BoxDecoration(
+        color: const Color(0xFF151515),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: Colors.white.withValues(alpha: .04),
+        ),
+      ),
+      child: Row(
+        children: [
+          Stack(
+            children: [
+              Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: const Color(0xFF00E676).withValues(alpha: .10),
+                ),
+                child: const Icon(
+                  Icons.person_outline,
+                  color: Color(0xFF00E676),
+                ),
+              ),
+              if (online)
+                Positioned(
+                  right: 0,
+                  bottom: 0,
+                  child: Container(
+                    width: 13,
+                    height: 13,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: const Color(0xFF00E676),
+                      border: Border.all(
+                        color: const Color(0xFF151515),
+                        width: 2,
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+
+          const SizedBox(width: 14),
+
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  name,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'ID: $id',
+                  style: TextStyle(
+                    color: Colors.grey.shade600,
+                    fontSize: 12,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  online ? 'متصل الآن' : 'غير متصل',
+                  style: TextStyle(
+                    color: online
+                        ? const Color(0xFF00E676)
+                        : Colors.grey.shade700,
+                    fontSize: 11,
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          PopupMenuButton<String>(
+            icon: Icon(
+              Icons.more_vert,
+              color: Colors.grey.shade500,
+            ),
+            color: const Color(0xFF1B1B1B),
+            onSelected: (value) {
+              if (value == 'profile') {
+                showDialog(
+                  context: context,
+                  builder: (dialogContext) {
+                    return Directionality(
+                      textDirection: TextDirection.rtl,
+                      child: AlertDialog(
+                        backgroundColor: const Color(0xFF151515),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(24),
+                        ),
+                        title: const Text(
+                          'معلومات المستخدم',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        content: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: 70,
+                              height: 70,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: const Color(0xFF00E676)
+                                    .withValues(alpha: .10),
+                              ),
+                              child: const Icon(
+                                Icons.person_outline,
+                                size: 34,
+                                color: Color(0xFF00E676),
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            Text(
+                              name,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 20,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              'ID: $id',
+                              style: TextStyle(
+                                color: Colors.grey.shade500,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              online ? 'متصل الآن' : 'غير متصل',
+                              style: TextStyle(
+                                color: online
+                                    ? const Color(0xFF00E676)
+                                    : Colors.grey.shade600,
+                              ),
+                            ),
+                          ],
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () =>
+                                Navigator.pop(dialogContext),
+                            child: const Text('إغلاق'),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                );
+              }
+
+              if (value == 'delete') {
+                showDialog(
+                  context: context,
+                  builder: (dialogContext) {
+                    return Directionality(
+                      textDirection: TextDirection.rtl,
+                      child: AlertDialog(
+                        backgroundColor: const Color(0xFF151515),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(24),
+                        ),
+                        title: const Text(
+                          'حذف جهة الاتصال',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        content: Text(
+                          'هل تريد حذف $name من جهات الاتصال؟',
+                          style: TextStyle(
+                            color: Colors.grey.shade400,
+                          ),
+                        ),
+                        actions: [
+                          TextButton(
+                            onPressed: () =>
+                                Navigator.pop(dialogContext),
+                            child: Text(
+                              'إلغاء',
+                              style: TextStyle(
+                                color: Colors.grey.shade500,
+                              ),
+                            ),
+                          ),
+                          FilledButton(
+                            onPressed: () {
+                              Navigator.pop(dialogContext);
+
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    'تم حذف $name من جهات الاتصال',
+                                  ),
+                                ),
+                              );
+                            },
+                            style: FilledButton.styleFrom(
+                              backgroundColor: Colors.red.shade800,
+                              foregroundColor: Colors.white,
+                            ),
+                            child: const Text('حذف'),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                );
+              }
+            },
+            itemBuilder: (context) => const [
+              PopupMenuItem<String>(
+                value: 'profile',
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.person_outline,
+                      color: Colors.white,
+                    ),
+                    SizedBox(width: 10),
+                    Text(
+                      'عرض المعلومات',
+                      style: TextStyle(color: Colors.white),
+                    ),
+                  ],
+                ),
+              ),
+              PopupMenuItem<String>(
+                value: 'delete',
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.delete_outline,
+                      color: Colors.redAccent,
+                    ),
+                    SizedBox(width: 10),
+                    Text(
+                      'حذف جهة الاتصال',
+                      style: TextStyle(color: Colors.redAccent),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+
+          IconButton(
+            onPressed: online
+                ? () {
+                    final session = CallSession.instance;
+
+                    if (!session.loggedIn) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('يجب تسجيل الدخول أولًا'),
+                        ),
+                      );
+                      return;
+                    }
+
+                    session.socket.send({
+                      'type': 'call',
+                      'target_id': id,
+                      'caller_name': session.displayName ?? 'Hesam',
+                    });
+
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          'جاري الاتصال بـ $name',
+                        ),
+                        backgroundColor: const Color(0xFF00A85A),
+                      ),
+                    );
+                  }
+                : null,
+            tooltip: 'اتصال',
+            icon: Icon(
+              Icons.call,
+              color: online
+                  ? const Color(0xFF00E676)
+                  : Colors.grey.shade800,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+
+
+class IncomingCallScreen extends StatelessWidget {
+  final String name;
+  final String id;
+
+  const IncomingCallScreen({
+    super.key,
+    required this.name,
+    required this.id,
+  });
+
+  void acceptCall(BuildContext context) {
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(
+        builder: (_) => CallScreen(
+          name: name,
+          id: id,
+        ),
+      ),
+    );
+  }
+
+  void rejectCall(BuildContext context) {
+    Navigator.pop(context);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('تم رفض المكالمة من $name'),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: Scaffold(
+        backgroundColor: const Color(0xFF050505),
+        body: SafeArea(
+          child: Column(
+            children: [
+              const SizedBox(height: 50),
+
+              Text(
+                'مكالمة واردة',
+                style: TextStyle(
+                  color: Colors.grey.shade500,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+
+              const Spacer(),
+
+              Container(
+                width: 140,
+                height: 140,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: const Color(0xFF00E676).withValues(alpha: .08),
+                  border: Border.all(
+                    color: const Color(0xFF00E676).withValues(alpha: .35),
+                    width: 2,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFF00E676).withValues(alpha: .12),
+                      blurRadius: 40,
+                      spreadRadius: 10,
+                    ),
+                  ],
+                ),
+                child: const Icon(
+                  Icons.person,
+                  size: 68,
+                  color: Color(0xFF00E676),
+                ),
+              ),
+
+              const SizedBox(height: 28),
+
+              Text(
+                name,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 28,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+
+              const SizedBox(height: 8),
+
+              Text(
+                'ID: $id',
+                style: TextStyle(
+                  color: Colors.grey.shade600,
+                  fontSize: 13,
+                ),
+              ),
+
+              const SizedBox(height: 16),
+
+              Text(
+                'يتصل بك الآن...',
+                style: TextStyle(
+                  color: Colors.grey.shade500,
+                  fontSize: 14,
+                ),
+              ),
+
+              const Spacer(),
+
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  Column(
+                    children: [
+                      GestureDetector(
+                        onTap: () => rejectCall(context),
+                        child: Container(
+                          width: 70,
+                          height: 70,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Colors.red.shade700,
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.red.withValues(alpha: .20),
+                                blurRadius: 25,
+                                spreadRadius: 3,
+                              ),
+                            ],
+                          ),
+                          child: const Icon(
+                            Icons.call_end,
+                            color: Colors.white,
+                            size: 32,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        'رفض',
+                        style: TextStyle(
+                          color: Colors.grey.shade600,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+
+                  Column(
+                    children: [
+                      GestureDetector(
+                        onTap: () => acceptCall(context),
+                        child: Container(
+                          width: 70,
+                          height: 70,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: const Color(0xFF00C853),
+                            boxShadow: [
+                              BoxShadow(
+                                color: const Color(0xFF00E676)
+                                    .withValues(alpha: .22),
+                                blurRadius: 25,
+                                spreadRadius: 3,
+                              ),
+                            ],
+                          ),
+                          child: const Icon(
+                            Icons.call,
+                            color: Colors.white,
+                            size: 32,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        'قبول',
+                        style: TextStyle(
+                          color: Colors.grey.shade600,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 55),
+
+              Text(
+                'CN CALL',
+                style: TextStyle(
+                  color: Colors.grey.shade800.withValues(alpha: .45),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 2,
+                ),
+              ),
+
+              const SizedBox(height: 28),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class CallScreen extends StatefulWidget {
+  final String name;
+  final String id;
+
+  const CallScreen({
+    super.key,
+    required this.name,
+    required this.id,
+  });
+
+  @override
+  State<CallScreen> createState() => _CallScreenState();
+}
+
+class _CallScreenState extends State<CallScreen> {
+  bool muted = false;
+  bool speaker = false;
+  bool connected = false;
+  int seconds = 0;
+
+  @override
+  void initState() {
+    super.initState();
+
+    Future.doWhile(() async {
+      await Future.delayed(const Duration(seconds: 1));
+
+      if (!mounted) return false;
+
+      setState(() {
+        if (!connected) {
+          connected = true;
+        } else {
+          seconds++;
+        }
+      });
+
+      return mounted;
+    });
+  }
+
+  String get durationText {
+    final minutes = seconds ~/ 60;
+    final remainingSeconds = seconds % 60;
+
+    return '${minutes.toString().padLeft(2, '0')}:'
+        '${remainingSeconds.toString().padLeft(2, '0')}';
+  }
+
+  void endCall() {
+    Navigator.pop(context);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('انتهت المكالمة مع ${widget.name}'),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: Scaffold(
+        backgroundColor: const Color(0xFF050505),
+        body: SafeArea(
+          child: Column(
+            children: [
+              const SizedBox(height: 24),
+
+              Row(
+                children: [
+                  IconButton(
+                    onPressed: () => Navigator.pop(context),
+                    icon: const Icon(
+                      Icons.keyboard_arrow_down,
+                      color: Colors.white,
+                      size: 30,
+                    ),
+                  ),
+                  const Expanded(
+                    child: Center(
+                      child: Text(
+                        'CN CALL',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 1.5,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 48),
+                ],
+              ),
+
+              const Spacer(),
+
+              Container(
+                width: 128,
+                height: 128,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: const Color(0xFF00E676).withValues(alpha: .08),
+                  border: Border.all(
+                    color: const Color(0xFF00E676).withValues(alpha: .35),
+                    width: 2,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFF00E676).withValues(alpha: .12),
+                      blurRadius: 35,
+                      spreadRadius: 8,
+                    ),
+                  ],
+                ),
+                child: const Icon(
+                  Icons.person,
+                  size: 62,
+                  color: Color(0xFF00E676),
+                ),
+              ),
+
+              const SizedBox(height: 28),
+
+              Text(
+                widget.name,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 27,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+
+              const SizedBox(height: 8),
+
+              Text(
+                'ID: ${widget.id}',
+                style: TextStyle(
+                  color: Colors.grey.shade600,
+                  fontSize: 13,
+                ),
+              ),
+
+              const SizedBox(height: 18),
+
+              Text(
+                durationText,
+                style: const TextStyle(
+                  color: Color(0xFF00E676),
+                  fontSize: 18,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.5,
+                ),
+              ),
+
+              const SizedBox(height: 8),
+
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 300),
+                child: Text(
+                  connected ? 'متصل الآن' : 'جاري الاتصال...',
+                  key: ValueKey(connected),
+                  style: TextStyle(
+                    color: connected
+                        ? const Color(0xFF00E676)
+                        : Colors.grey.shade500,
+                    fontSize: 14,
+                    fontWeight: connected
+                        ? FontWeight.w600
+                        : FontWeight.normal,
+                  ),
+                ),
+              ),
+
+              const Spacer(),
+
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 34),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    _CallControlButton(
+                      icon: muted
+                          ? Icons.mic_off
+                          : Icons.mic_none,
+                      label: muted ? 'إلغاء الكتم' : 'كتم',
+                      active: muted,
+                      onPressed: () {
+                        setState(() {
+                          muted = !muted;
+                        });
+                      },
+                    ),
+                    _CallControlButton(
+                      icon: speaker
+                          ? Icons.volume_up
+                          : Icons.volume_down,
+                      label: 'مكبر الصوت',
+                      active: speaker,
+                      onPressed: () {
+                        setState(() {
+                          speaker = !speaker;
+                        });
+                      },
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 34),
+
+              GestureDetector(
+                onTap: endCall,
+                child: Container(
+                  width: 70,
+                  height: 70,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Colors.red.shade700,
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.red.withValues(alpha: .22),
+                        blurRadius: 25,
+                        spreadRadius: 3,
+                      ),
+                    ],
+                  ),
+                  child: const Icon(
+                    Icons.call_end,
+                    color: Colors.white,
+                    size: 32,
+                  ),
+                ),
+              ),
+
+              const SizedBox(height: 12),
+
+              Text(
+                'إنهاء المكالمة',
+                style: TextStyle(
+                  color: Colors.grey.shade600,
+                  fontSize: 12,
+                ),
+              ),
+
+              const SizedBox(height: 38),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _CallControlButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final bool active;
+  final VoidCallback onPressed;
+
+  const _CallControlButton({
+    required this.icon,
+    required this.label,
+    required this.active,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        IconButton(
+          onPressed: onPressed,
+          style: IconButton.styleFrom(
+            backgroundColor: active
+                ? const Color(0xFF00E676).withValues(alpha: .18)
+                : const Color(0xFF151515),
+            foregroundColor: active
+                ? const Color(0xFF00E676)
+                : Colors.white,
+            fixedSize: const Size(58, 58),
+          ),
+          icon: Icon(icon),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          label,
+          style: TextStyle(
+            color: Colors.grey.shade600,
+            fontSize: 11,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _CallHistoryItem extends StatelessWidget {
+  final String name;
+  final String id;
+  final String time;
+  final bool incoming;
+
+  const _CallHistoryItem({
+    required this.name,
+    required this.id,
+    required this.time,
+    required this.incoming,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF151515),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 46,
+            height: 46,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: const Color(0xFF00E676).withValues(alpha: .10),
+            ),
+            child: Icon(
+              incoming ? Icons.call_received : Icons.call_made,
+              color: const Color(0xFF00E676),
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  name,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 15,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  'ID: $id',
+                  style: TextStyle(
+                    color: Colors.grey.shade600,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Text(
+            time,
+            style: TextStyle(
+              color: Colors.grey.shade600,
+              fontSize: 11,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ============================================================
+// REGISTER
+// ============================================================
+
+class RegisterScreen extends StatefulWidget {
+  const RegisterScreen({super.key});
+
+  @override
+  State<RegisterScreen> createState() => _RegisterScreenState();
+}
+
+class _RegisterScreenState extends State<RegisterScreen> {
+  final userIdController = TextEditingController();
+
+  final usernameController = TextEditingController();
+  final passwordController = TextEditingController();
+  final confirmPasswordController = TextEditingController();
+
+  bool hidePassword = true;
+  bool hideConfirmPassword = true;
+
+  @override
+  void dispose() {
+    userIdController.dispose();
+
+    usernameController.dispose();
+    passwordController.dispose();
+    confirmPasswordController.dispose();
+    super.dispose();
+  }
+
+  void createAccount() {
+    final userId = userIdController.text.trim();
+    final username = usernameController.text.trim();
+    final password = passwordController.text;
+    final confirmPassword = confirmPasswordController.text;
+
+    if (userId.isEmpty ||
+        username.isEmpty ||
+        password.isEmpty ||
+        confirmPassword.isEmpty) {
+      _message('أكمل جميع البيانات');
+      return;
+    }
+
+    if (int.tryParse(userId) == null) {
+      _message('ID المستخدم يجب أن يكون أرقامًا فقط');
+      return;
+    }
+
+    if (username.length < 3) {
+      _message('اسم المستخدم يجب أن يكون 3 أحرف على الأقل');
+      return;
+    }
+
+    if (password.length < 6) {
+      _message('كلمة المرور يجب أن تكون 6 أحرف على الأقل');
+      return;
+    }
+
+    if (password != confirmPassword) {
+      _message('كلمتا المرور غير متطابقتين');
+      return;
+    }
+
+    _message('تم تجهيز الحساب بنجاح', success: true);
+
+    Future.delayed(const Duration(milliseconds: 700), () {
+      if (!mounted) return;
+      Navigator.pop(context);
+    });
+  }
+
+  void _message(String text, {bool success = false}) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(text),
+        backgroundColor:
+            success ? const Color(0xFF00A85A) : Colors.red.shade800,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: Scaffold(
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          leading: IconButton(
+            onPressed: () => Navigator.pop(context),
+            icon: const Icon(Icons.arrow_back),
+          ),
+        ),
+        body: SafeArea(
+          child: Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(24, 10, 24, 40),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 430),
+                child: Column(
+                  children: [
+                    _Logo(),
+
+                    const SizedBox(height: 22),
+
+                    const Text(
+                      'إنشاء حساب',
+                      style: TextStyle(
+                        fontSize: 30,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+
+                    const SizedBox(height: 8),
+
+                    Text(
+                      'أنشئ حسابك في CN CALL',
+                      style: TextStyle(
+                        color: Colors.grey.shade500,
+                        fontSize: 14,
+                      ),
+                    ),
+
+                    const SizedBox(height: 34),
+
+                    _Field(
+                      controller: userIdController,
+                      label: 'ID المستخدم',
+                      hint: 'الرقم الذي تستخدمه لتسجيل الدخول والتواصل',
+                      icon: Icons.badge_outlined,
+                      keyboardType: TextInputType.number,
+                    ),
+
+                    const SizedBox(height: 16),
+
+                    _Field(
+                      controller: usernameController,
+                      label: 'اسم المستخدم',
+                      hint: 'الاسم الذي سيظهر للآخرين أثناء المكالمة',
+                      icon: Icons.person_outline,
+                    ),
+
+                    const SizedBox(height: 16),
+
+                    _Field(
+                      controller: passwordController,
+                      label: 'كلمة المرور',
+                      hint: '6 أحرف على الأقل',
+                      icon: Icons.lock_outline,
+                      obscureText: hidePassword,
+                      suffix: IconButton(
+                        onPressed: () {
+                          setState(() {
+                            hidePassword = !hidePassword;
+                          });
+                        },
+                        icon: Icon(
+                          hidePassword
+                              ? Icons.visibility_off
+                              : Icons.visibility,
+                        ),
+                      ),
+                    ),
+
+                    const SizedBox(height: 16),
+
+                    _Field(
+                      controller: confirmPasswordController,
+                      label: 'تأكيد كلمة المرور',
+                      hint: 'أعد كتابة كلمة المرور',
+                      icon: Icons.lock_reset_outlined,
+                      obscureText: hideConfirmPassword,
+                      suffix: IconButton(
+                        onPressed: () {
+                          setState(() {
+                            hideConfirmPassword =
+                                !hideConfirmPassword;
+                          });
+                        },
+                        icon: Icon(
+                          hideConfirmPassword
+                              ? Icons.visibility_off
+                              : Icons.visibility,
+                        ),
+                      ),
+                    ),
+
+                    const SizedBox(height: 24),
+
+                    _PrimaryButton(
+                      text: 'إنشاء الحساب',
+                      onPressed: createAccount,
+                    ),
+
+                    const SizedBox(height: 16),
+
+                    TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text(
+                        'لدي حساب بالفعل',
+                        style: TextStyle(
+                          color: Color(0xFF00E676),
+                        ),
+                      ),
+                    ),
+
+                    const SizedBox(height: 20),
+
+                    _Footer(),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ============================================================
+// SHARED UI
+// ============================================================
+
+class _Logo extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 88,
+      height: 88,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: const Color(0xFF00E676).withValues(alpha: .10),
+        border: Border.all(
+          color: const Color(0xFF00E676),
+          width: 2,
+        ),
+      ),
+      child: const Icon(
+        Icons.call,
+        size: 40,
+        color: Color(0xFF00E676),
+      ),
+    );
+  }
+}
+
+class _Field extends StatelessWidget {
+  final TextEditingController controller;
+  final String label;
+  final String hint;
+  final IconData icon;
+  final bool obscureText;
+  final TextInputType? keyboardType;
+  final Widget? suffix;
+
+  const _Field({
+    required this.controller,
+    required this.label,
+    required this.hint,
+    required this.icon,
+    this.obscureText = false,
+    this.keyboardType,
+    this.suffix,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: controller,
+      obscureText: obscureText,
+      keyboardType: keyboardType,
+      textDirection: TextDirection.ltr,
+      decoration: InputDecoration(
+        labelText: label,
+        hintText: hint,
+        prefixIcon: Icon(icon),
+        suffixIcon: suffix,
+        filled: true,
+        fillColor: const Color(0xFF151515),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(18),
+          borderSide: BorderSide.none,
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(18),
+          borderSide: const BorderSide(
+            color: Color(0xFF00E676),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PrimaryButton extends StatelessWidget {
+  final String text;
+  final VoidCallback onPressed;
+
+  const _PrimaryButton({
+    required this.text,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: double.infinity,
+      height: 56,
+      child: FilledButton(
+        onPressed: onPressed,
+        style: FilledButton.styleFrom(
+          backgroundColor: const Color(0xFF00E676),
+          foregroundColor: Colors.black,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(18),
+          ),
+        ),
+        child: Text(
+          text,
+          style: const TextStyle(
+            fontSize: 17,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _Footer extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          'CAFEE NET',
+          style: TextStyle(
+            color: Colors.grey.shade800.withValues(alpha: .45),
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 2.2,
+          ),
+        ),
+        const SizedBox(height: 3),
+        Text(
+          'هشام الريمي',
+          style: TextStyle(
+            color: Colors.grey.shade800.withValues(alpha: .35),
+            fontSize: 9,
+            fontWeight: FontWeight.w500,
+            letterSpacing: .8,
+          ),
+        ),
+      ],
+    );
+  }
+}

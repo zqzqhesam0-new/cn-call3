@@ -1,0 +1,58 @@
+import 'dart:async';
+
+import 'call_socket.dart';
+
+class CallSession {
+  CallSession._();
+
+  static final CallSession instance = CallSession._();
+
+  final CallSocket socket = CallSocket();
+
+  final StreamController<Map<String, dynamic>> _incomingCalls =
+      StreamController<Map<String, dynamic>>.broadcast();
+
+  Stream<Map<String, dynamic>> get incomingCalls => _incomingCalls.stream;
+
+  String? userId;
+  String? displayName;
+
+  StreamSubscription<Map<String, dynamic>>? _messageSubscription;
+
+  bool get loggedIn => userId != null;
+
+  void login({
+    required String id,
+    required String name,
+  }) {
+    userId = id;
+    displayName = name;
+
+    socket.connect(id);
+
+    _messageSubscription?.cancel();
+
+    _messageSubscription = socket.messages.listen((message) {
+      if (message['type'] == 'call') {
+        _incomingCalls.add(message);
+      }
+    });
+  }
+
+  void logout() {
+    _messageSubscription?.cancel();
+    _messageSubscription = null;
+
+    socket.disconnect();
+
+    userId = null;
+    displayName = null;
+  }
+
+  void dispose() {
+    _messageSubscription?.cancel();
+    _messageSubscription = null;
+    _incomingCalls.close();
+    socket.disconnect();
+  }
+}
