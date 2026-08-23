@@ -116,9 +116,14 @@ class FirebaseMessagingService {
         print(initialMessage.data);
 
         if (initialMessage.data['type'] == 'incoming_call') {
-          CallSession.instance.incomingCallFromNotification(
-            Map<String, dynamic>.from(initialMessage.data),
+          final prefs = await SharedPreferences.getInstance();
+
+          await prefs.setString(
+            'pending_incoming_call',
+            jsonEncode(initialMessage.data),
           );
+
+          print('FCM: saved initial incoming call');
         }
       }
 
