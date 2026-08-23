@@ -410,6 +410,9 @@ def send_call_notification(
 ):
     token = FCM_TOKENS.get(target_id)
 
+    print("FCM TARGET:", target_id)
+    print("FCM TOKEN FOUND:", bool(token))
+
     if not token:
         db = get_db()
         row = db.execute(
