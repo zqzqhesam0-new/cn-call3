@@ -13,13 +13,18 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   print('FCM BACKGROUND MESSAGE: ${message.messageId}');
   print('FCM BACKGROUND DATA: ${message.data}');
 
-  if (message.data['type'] == 'incoming_call') {
-    final prefs = await SharedPreferences.getInstance();
+  final prefs = await SharedPreferences.getInstance();
 
+  if (message.data['type'] == 'incoming_call') {
     await prefs.setString(
       'pending_incoming_call',
       jsonEncode(message.data),
     );
+  }
+
+  if (message.data['type'] == 'call_cancelled') {
+    await prefs.remove('pending_incoming_call');
+    print('FCM: removed pending incoming call');
   }
 }
 
