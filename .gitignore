@@ -1,1 +1,7 @@
 server/secrets/
+
+*.bak
+*.backup*
+*.save
+*.db
+*_backup*/
