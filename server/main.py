@@ -464,15 +464,16 @@ async def websocket_endpoint(
     websocket: WebSocket,
     user_id: str,
 ):
+    if user_id in connections:
+        await websocket.accept()
+        await websocket.send_json({
+            "type": "login_error",
+            "message": "الحساب مفتوح بالفعل على جهاز أو نافذة أخرى",
+        })
+        await websocket.close()
+        return
+
     await websocket.accept()
-
-    old = connections.get(user_id)
-
-    if old is not None:
-        try:
-            await old.close()
-        except Exception:
-            pass
 
     connections[user_id] = websocket
 
