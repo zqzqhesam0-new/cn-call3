@@ -178,6 +178,7 @@ async def save_fcm_token(request: FcmTokenRequest):
         }
 
     FCM_TOKENS[user_id] = token
+    print("SAVED FCM TOKEN USER:", user_id)
 
     db = get_db()
     db.execute(
