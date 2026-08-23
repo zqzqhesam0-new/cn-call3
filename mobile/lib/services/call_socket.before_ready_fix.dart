@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:web_socket_channel/web_socket_channel.dart';
-
 import 'server_config.dart';
 
 class CallSocket {
@@ -22,12 +21,17 @@ class CallSocket {
       Uri.parse(ServerConfig.websocketUrl(userId)),
     );
 
+    _channel = channel;
+
     try {
       await channel.ready;
 
-      _channel = channel;
+      if (!identical(_channel, channel)) {
+        await channel.sink.close();
+        return;
+      }
 
-      print('SOCKET CONNECTED: ${ServerConfig.websocketUrl(userId)}');
+      print('SOCKET CONNECTED: user=$userId');
 
       channel.stream.listen(
         (message) {
@@ -35,42 +39,39 @@ class CallSocket {
             final data = jsonDecode(message);
 
             if (data is Map) {
-              final parsed = Map<String, dynamic>.from(data);
-
-              print('SOCKET RECEIVE: $parsed');
-
-              _messages.add(parsed);
+              _messages.add(
+                Map<String, dynamic>.from(data),
+              );
             }
           } catch (e) {
-            print('SOCKET JSON ERROR: $e');
+            print('SOCKET MESSAGE ERROR: $e');
           }
         },
         onDone: () {
-          print('SOCKET CLOSED');
-
           if (identical(_channel, channel)) {
             _channel = null;
           }
+
+          print('SOCKET CLOSED: user=$userId');
         },
         onError: (error, stackTrace) {
-          print('SOCKET ERROR: $error');
-
           if (identical(_channel, channel)) {
             _channel = null;
           }
+
+          print('SOCKET ERROR: $error');
         },
-        cancelOnError: false,
       );
     } catch (e) {
-      print('SOCKET CONNECT ERROR: $e');
-
-      await channel.sink.close();
-
       if (identical(_channel, channel)) {
         _channel = null;
       }
 
-      rethrow;
+      print('SOCKET CONNECT ERROR: $e');
+
+      try {
+        await channel.sink.close();
+      } catch (_) {}
     }
   }
 
@@ -95,7 +96,10 @@ class CallSocket {
   Future<void> dispose() async {
     await _messages.close();
 
-    _channel?.sink.close();
+    try {
+      await _channel?.sink.close();
+    } catch (_) {}
+
     _channel = null;
   }
 }

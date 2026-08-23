@@ -1,8 +1,10 @@
-import 'package:flutter/foundation.dart';
-
+import 'dart:io';
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:firebase_core/firebase_core.dart';import 'firebase_options.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+
+import 'firebase_options.dart';
 
 import 'services/call_session.dart';
 import 'services/firebase_messaging_service.dart';
@@ -10,14 +12,33 @@ import 'services/account_api.dart';
 import 'services/rtc_call_manager.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
+@pragma('vm:entry-point')
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
-  await FirebaseMessagingService.instance.initialize();
+}
 
-  RtcCallManager.instance.startListening();
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  if (Platform.isAndroid) {
+    await FirebaseMessaging.instance.requestPermission(
+      alert: true,
+      badge: true,
+      sound: true,
+    );
+  }
+
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+
+  FirebaseMessaging.onBackgroundMessage(
+    _firebaseMessagingBackgroundHandler,
+  );
+
+  await FirebaseMessagingService.instance.initialize();
 
   runApp(const CNCallApp());
 }
@@ -351,13 +372,14 @@ class _HomeScreenState extends State<HomeScreen> {
     final rtcManager = RtcCallManager.instance;
     rtcManager.startListening();
 
-    void showIncomingCall(Map<String, dynamic> call) {
+    rtcManager.onDisconnected = () {
+      _closeIncomingCallScreen();
+    };
+
+    rtcManager.onIncomingCall = (call) {
       if (!mounted) return;
 
-      final callerId = call['caller_id']?.toString() ??
-          call['from_id']?.toString() ??
-          '';
-
+      final callerId = call['from_id']?.toString() ?? '';
       final callerName =
           call['caller_name']?.toString() ?? 'مستخدم CN CALL';
 
@@ -385,16 +407,6 @@ class _HomeScreenState extends State<HomeScreen> {
           _incomingCallScreenOpen = false;
         }
       });
-    }
-
-    // المكالمات القادمة مباشرة عبر WebSocket.
-    rtcManager.onIncomingCall = showIncomingCall;
-
-    // المكالمات التي وصلت عبر FCM أثناء إغلاق التطبيق.
-    CallSession.instance.incomingCalls.listen(showIncomingCall);
-
-    rtcManager.onDisconnected = () {
-      _closeIncomingCallScreen();
     };
   }
 

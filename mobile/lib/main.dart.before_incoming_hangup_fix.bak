@@ -1,8 +1,9 @@
-import 'package:flutter/foundation.dart';
-
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:firebase_core/firebase_core.dart';import 'firebase_options.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+
+import 'firebase_options.dart';
 
 import 'services/call_session.dart';
 import 'services/firebase_messaging_service.dart';
@@ -10,14 +11,25 @@ import 'services/account_api.dart';
 import 'services/rtc_call_manager.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-Future<void> main() async {
-  WidgetsFlutterBinding.ensureInitialized();
+@pragma('vm:entry-point')
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
-  await FirebaseMessagingService.instance.initialize();
+}
 
-  RtcCallManager.instance.startListening();
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+
+  FirebaseMessaging.onBackgroundMessage(
+    _firebaseMessagingBackgroundHandler,
+  );
+
+  await FirebaseMessagingService.instance.initialize();
 
   runApp(const CNCallApp());
 }
@@ -136,6 +148,8 @@ class _LoginScreenState extends State<LoginScreen> {
       password: password,
     );
 
+    await FirebaseMessagingService.instance.refreshTokenForCurrentUser();
+
     if (!mounted) return;
 
     final success = result['success'] == true;
@@ -170,8 +184,6 @@ class _LoginScreenState extends State<LoginScreen> {
       id: loggedUserId,
       name: username,
     );
-
-    await FirebaseMessagingService.instance.refreshTokenForCurrentUser();
 
     Navigator.pushReplacement(
       context,
@@ -330,18 +342,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
   bool _incomingCallScreenOpen = false;
 
-  void _closeIncomingCallScreen() {
-    if (!mounted || !_incomingCallScreenOpen) return;
-
-    final navigator = Navigator.of(context);
-
-    if (navigator.canPop()) {
-      navigator.pop();
-    }
-
-    _incomingCallScreenOpen = false;
-  }
-
   @override
   void initState() {
     super.initState();
@@ -351,13 +351,10 @@ class _HomeScreenState extends State<HomeScreen> {
     final rtcManager = RtcCallManager.instance;
     rtcManager.startListening();
 
-    void showIncomingCall(Map<String, dynamic> call) {
+    rtcManager.onIncomingCall = (call) {
       if (!mounted) return;
 
-      final callerId = call['caller_id']?.toString() ??
-          call['from_id']?.toString() ??
-          '';
-
+      final callerId = call['from_id']?.toString() ?? '';
       final callerName =
           call['caller_name']?.toString() ?? 'مستخدم CN CALL';
 
@@ -385,16 +382,6 @@ class _HomeScreenState extends State<HomeScreen> {
           _incomingCallScreenOpen = false;
         }
       });
-    }
-
-    // المكالمات القادمة مباشرة عبر WebSocket.
-    rtcManager.onIncomingCall = showIncomingCall;
-
-    // المكالمات التي وصلت عبر FCM أثناء إغلاق التطبيق.
-    CallSession.instance.incomingCalls.listen(showIncomingCall);
-
-    rtcManager.onDisconnected = () {
-      _closeIncomingCallScreen();
     };
   }
 
@@ -1264,13 +1251,13 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
   Future<void> rejectCall(BuildContext context) async {
     RtcCallManager.instance.startListening();
 
-    if (context.mounted) {
-      Navigator.pop(context);
-    }
-
     await RtcCallManager.instance.rejectCall(
       callerId: widget.id,
     );
+
+    if (!context.mounted) return;
+
+    Navigator.pop(context);
   }
 
   @override
@@ -1478,7 +1465,6 @@ class _CallScreenState extends State<CallScreen> {
   int seconds = 0;
 
   Timer? _timer;
-  bool _closing = false;
 
   @override
   void initState() {
@@ -1497,17 +1483,13 @@ class _CallScreenState extends State<CallScreen> {
     };
 
     manager.onDisconnected = () {
-      if (_closing) return;
-
-      _closing = true;
-
       if (!mounted) return;
 
-      _timer?.cancel();
+      setState(() {
+        connected = false;
+      });
 
-      if (Navigator.of(context).canPop()) {
-        Navigator.of(context).pop();
-      }
+      _timer?.cancel();
     };
 
     if (manager.inCall) {
@@ -1564,17 +1546,11 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   Future<void> endCall() async {
-    if (_closing) return;
-
-    _closing = true;
-
     await RtcCallManager.instance.hangup();
 
     if (!mounted) return;
 
-    if (Navigator.of(context).canPop()) {
-      Navigator.of(context).pop();
-    }
+    Navigator.pop(context);
   }
 
   @override

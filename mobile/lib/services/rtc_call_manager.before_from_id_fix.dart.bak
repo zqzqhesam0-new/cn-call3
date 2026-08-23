@@ -25,7 +25,6 @@ class RtcCallManager {
   Function(Map<String, dynamic> message)? onIncomingCall;
 
   bool _started = false;
-  bool _hangingUp = false;
 
   void startListening() {
     if (_started) return;
@@ -40,7 +39,6 @@ class RtcCallManager {
       session.socket.send({
         'type': 'ice_candidate',
         'target_id': target,
-        'from_id': session.userId,
         'candidate': candidate.candidate,
         'sdp_mid': candidate.sdpMid,
         'sdp_mline_index': candidate.sdpMLineIndex,
@@ -53,14 +51,7 @@ class RtcCallManager {
     };
 
     rtc.onDisconnected = () {
-      if (_hangingUp) return;
-
       inCall = false;
-      remoteUserId = null;
-      caller = false;
-      _remoteDescriptionSet = false;
-      _pendingIceCandidates.clear();
-
       onDisconnected?.call();
     };
   }
@@ -97,7 +88,6 @@ class RtcCallManager {
 
     if (type == 'hangup' || type == 'call_reject') {
       await hangup(sendSignal: false);
-      return;
     }
   }
 
@@ -153,7 +143,6 @@ class RtcCallManager {
     session.socket.send({
       'type': 'offer',
       'target_id': target,
-      'from_id': session.userId,
       'sdp': offer.sdp,
       'sdp_type': offer.type,
     });
@@ -183,7 +172,6 @@ class RtcCallManager {
     session.socket.send({
       'type': 'answer',
       'target_id': fromId,
-      'from_id': session.userId,
       'sdp': answer.sdp,
       'sdp_type': answer.type,
     });
@@ -263,10 +251,6 @@ class RtcCallManager {
   Future<void> hangup({
     bool sendSignal = true,
   }) async {
-    if (_hangingUp) return;
-
-    _hangingUp = true;
-
     final target = remoteUserId;
 
     if (sendSignal && target != null) {
@@ -284,10 +268,6 @@ class RtcCallManager {
     remoteUserId = null;
     inCall = false;
     caller = false;
-
-    onDisconnected?.call();
-
-    _hangingUp = false;
   }
 
   Future<void> mute(bool value) {

@@ -25,7 +25,6 @@ class RtcCallManager {
   Function(Map<String, dynamic> message)? onIncomingCall;
 
   bool _started = false;
-  bool _hangingUp = false;
 
   void startListening() {
     if (_started) return;
@@ -53,14 +52,7 @@ class RtcCallManager {
     };
 
     rtc.onDisconnected = () {
-      if (_hangingUp) return;
-
       inCall = false;
-      remoteUserId = null;
-      caller = false;
-      _remoteDescriptionSet = false;
-      _pendingIceCandidates.clear();
-
       onDisconnected?.call();
     };
   }
@@ -97,7 +89,6 @@ class RtcCallManager {
 
     if (type == 'hangup' || type == 'call_reject') {
       await hangup(sendSignal: false);
-      return;
     }
   }
 
@@ -263,10 +254,6 @@ class RtcCallManager {
   Future<void> hangup({
     bool sendSignal = true,
   }) async {
-    if (_hangingUp) return;
-
-    _hangingUp = true;
-
     final target = remoteUserId;
 
     if (sendSignal && target != null) {
@@ -286,8 +273,6 @@ class RtcCallManager {
     caller = false;
 
     onDisconnected?.call();
-
-    _hangingUp = false;
   }
 
   Future<void> mute(bool value) {

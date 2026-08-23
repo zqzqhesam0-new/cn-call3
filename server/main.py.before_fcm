@@ -8,9 +8,6 @@ import os
 import re
 import sqlite3
 
-import firebase_admin
-from firebase_admin import credentials, messaging
-
 
 app = FastAPI(title="CN CALL Server")
 
@@ -26,24 +23,7 @@ app.add_middleware(
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "cn_call.db"
 
-
 connections: dict[str, WebSocket] = {}
-
-FCM_TOKENS: dict[str, str] = {}
-
-firebase_key = BASE_DIR / "secrets" / "firebase-service-account.json"
-firebase_json = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
-
-if not firebase_admin._apps:
-    if firebase_json:
-        cred = credentials.Certificate(
-            __import__("json").loads(firebase_json)
-        )
-        firebase_admin.initialize_app(cred)
-    elif firebase_key.exists():
-        cred = credentials.Certificate(str(firebase_key))
-        firebase_admin.initialize_app(cred)
-
 
 
 # ============================================================
@@ -71,35 +51,11 @@ def init_db():
         """
     )
 
-    db.execute(
-        """
-        CREATE TABLE IF NOT EXISTS fcm_tokens (
-            user_id TEXT PRIMARY KEY,
-            token TEXT NOT NULL,
-            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )
-        """
-    )
-
     db.commit()
     db.close()
 
 
 init_db()
-
-
-def load_fcm_tokens():
-    db = get_db()
-    rows = db.execute(
-        "SELECT user_id, token FROM fcm_tokens"
-    ).fetchall()
-    db.close()
-
-    for row in rows:
-        FCM_TOKENS[row["user_id"]] = row["token"]
-
-
-load_fcm_tokens()
 
 
 # ============================================================
@@ -156,50 +112,6 @@ class LoginRequest(BaseModel):
     password: str
 
 
-class FcmTokenRequest(BaseModel):
-    user_id: str
-    token: str
-
-
-
-# ============================================================
-# FCM TOKEN
-# ============================================================
-
-@app.post("/fcm-token")
-async def save_fcm_token(request: FcmTokenRequest):
-    user_id = request.user_id.strip()
-    token = request.token.strip()
-
-    if not user_id or not token:
-        return {
-            "success": False,
-            "message": "بيانات FCM غير صالحة",
-        }
-
-    FCM_TOKENS[user_id] = token
-
-    db = get_db()
-    db.execute(
-        """
-        INSERT INTO fcm_tokens (user_id, token, updated_at)
-        VALUES (?, ?, CURRENT_TIMESTAMP)
-        ON CONFLICT(user_id)
-        DO UPDATE SET
-            token=excluded.token,
-            updated_at=CURRENT_TIMESTAMP
-        """,
-        (user_id, token),
-    )
-    db.commit()
-    db.close()
-
-    return {
-        "success": True,
-        "message": "تم حفظ FCM Token",
-    }
-
-
 # ============================================================
 # BASIC
 # ============================================================
@@ -211,14 +123,6 @@ async def root():
         "status": "online",
     }
 
-
-
-
-@app.get("/fcm-debug")
-def fcm_debug():
-    return {
-        "memory": FCM_TOKENS,
-    }
 
 @app.get("/health")
 async def health():
@@ -397,64 +301,6 @@ async def get_user(user_id: str):
     }
 
 
-
-# ============================================================
-# FCM NOTIFICATIONS
-# ============================================================
-
-def send_call_notification(
-    target_id: str,
-    caller_id: str,
-    caller_name: str,
-):
-    token = FCM_TOKENS.get(target_id)
-
-    if not token:
-        db = get_db()
-        row = db.execute(
-            "SELECT token FROM fcm_tokens WHERE user_id = ?",
-            (target_id,),
-        ).fetchone()
-        db.close()
-
-        if row:
-            token = row["token"]
-            FCM_TOKENS[target_id] = token
-
-    if not token:
-        return
-
-    if not firebase_admin._apps:
-        return
-
-    try:
-        message = messaging.Message(
-            token=token,
-            notification=messaging.Notification(
-                title="CN CALL",
-                body=f"مكالمة واردة من {caller_name}",
-            ),
-            data={
-                "type": "incoming_call",
-                "caller_id": caller_id,
-                "caller_name": caller_name,
-            },
-            android=messaging.AndroidConfig(
-                priority="high",
-                notification=messaging.AndroidNotification(
-                    channel_id="cn_call_calls",
-                    sound="default",
-                ),
-            ),
-        )
-
-        response = messaging.send(message)
-        print('FCM SENT:', response)
-
-    except Exception as e:
-        print(f"FCM send error: {e}")
-
-
 # ============================================================
 # WEBSOCKET / CALLS
 # ============================================================
@@ -484,7 +330,6 @@ async def websocket_endpoint(
 
         while True:
             message = await websocket.receive_json()
-            print('CALL MESSAGE:', message)
 
             target_id = str(
                 message.get("target_id", "")
@@ -495,20 +340,6 @@ async def websocket_endpoint(
                     **message,
                     "from_id": user_id,
                 })
-
-            if (
-                message.get("type") == "call"
-                and target_id
-            ):
-                caller_name = str(
-                    message.get("caller_name", "مستخدم CN CALL")
-                )
-
-                send_call_notification(
-                    target_id=target_id,
-                    caller_id=user_id,
-                    caller_name=caller_name,
-                )
 
     except WebSocketDisconnect:
         pass

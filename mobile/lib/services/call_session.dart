@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -34,7 +35,7 @@ class CallSession {
     await prefs.setString('cn_call_user_id', id);
     await prefs.setString('cn_call_display_name', name);
 
-    socket.connect(id);
+    await socket.connect(id);
 
     // استقبال رسائل المكالمات يتم الآن بواسطة RtcCallManager.
   }
@@ -52,11 +53,71 @@ class CallSession {
     userId = id;
     displayName = name;
 
-    socket.connect(id);
+    await socket.connect(id);
+
+    // استعادة أي مكالمة وصلت أثناء إغلاق التطبيق.
+    final pendingCall = prefs.getString('pending_incoming_call');
+
+    if (pendingCall != null && pendingCall.isNotEmpty) {
+      try {
+        final data = jsonDecode(pendingCall);
+
+        if (data is Map) {
+          _incomingCalls.add(
+            Map<String, dynamic>.from(data),
+          );
+        }
+
+        await prefs.remove('pending_incoming_call');
+      } catch (e) {
+        print('PENDING CALL RESTORE ERROR: $e');
+      }
+    }
 
     // استقبال رسائل المكالمات يتم الآن بواسطة RtcCallManager.
 
     return true;
+  }
+
+  Future<void> incomingCallFromNotification(
+    Map<String, dynamic> data,
+  ) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+
+      await prefs.setString(
+        'pending_incoming_call',
+        jsonEncode(data),
+      );
+
+      _incomingCalls.add(data);
+    } catch (e) {
+      print('SAVE INCOMING CALL ERROR: $e');
+    }
+  }
+
+  Future<Map<String, dynamic>?> takePendingIncomingCall() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+
+      final pending = prefs.getString('pending_incoming_call');
+
+      if (pending == null || pending.isEmpty) {
+        return null;
+      }
+
+      await prefs.remove('pending_incoming_call');
+
+      final data = jsonDecode(pending);
+
+      if (data is Map) {
+        return Map<String, dynamic>.from(data);
+      }
+    } catch (e) {
+      print('TAKE PENDING CALL ERROR: $e');
+    }
+
+    return null;
   }
 
   Future<void> logout() async {

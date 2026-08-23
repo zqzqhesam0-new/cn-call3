@@ -9,7 +9,6 @@ class WebRtcCall {
   Function(RTCIceCandidate candidate)? onIceCandidate;
   Function()? onConnected;
   Function()? onDisconnected;
-  bool _disconnectSent = false;
 
   bool get active => _peer != null;
 
@@ -64,28 +63,17 @@ class WebRtcCall {
     };
 
     _peer!.onConnectionState = (state) {
-      print('[CN CALL][WEBRTC] connectionState = $state');
-
       if (state == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
-        print('[CN CALL][WEBRTC] CONNECTED');
         onConnected?.call();
       }
 
       if (state ==
           RTCPeerConnectionState.RTCPeerConnectionStateDisconnected) {
-        print('[CN CALL][WEBRTC] DISCONNECTED');
-        if (!_disconnectSent) {
-          _disconnectSent = true;
-          onDisconnected?.call();
-        }
+        onDisconnected?.call();
       }
 
       if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed) {
-        print('[CN CALL][WEBRTC] FAILED');
-        if (!_disconnectSent) {
-          _disconnectSent = true;
-          onDisconnected?.call();
-        }
+        onDisconnected?.call();
       }
     };
   }
@@ -146,7 +134,6 @@ class WebRtcCall {
   }
 
   Future<void> close() async {
-    _disconnectSent = true;
     for (final track in _localStream?.getTracks() ?? []) {
       await track.stop();
     }
@@ -154,9 +141,7 @@ class WebRtcCall {
     await _localStream?.dispose();
     await _peer?.close();
 
-    if (_rendererReady) {
-      remoteRenderer.srcObject = null;
-    }
+    remoteRenderer.srcObject = null;
 
     _localStream = null;
     _peer = null;

@@ -212,14 +212,6 @@ async def root():
     }
 
 
-
-
-@app.get("/fcm-debug")
-def fcm_debug():
-    return {
-        "memory": FCM_TOKENS,
-    }
-
 @app.get("/health")
 async def health():
     return {
@@ -448,8 +440,7 @@ def send_call_notification(
             ),
         )
 
-        response = messaging.send(message)
-        print('FCM SENT:', response)
+        messaging.send(message)
 
     except Exception as e:
         print(f"FCM send error: {e}")
@@ -484,7 +475,6 @@ async def websocket_endpoint(
 
         while True:
             message = await websocket.receive_json()
-            print('CALL MESSAGE:', message)
 
             target_id = str(
                 message.get("target_id", "")
