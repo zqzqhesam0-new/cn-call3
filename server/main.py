@@ -763,7 +763,7 @@ async def websocket_endpoint(
                     ring_expires_at = int(time.time() * 1000) + 90000
 
                 created_at = int(time.time() * 1000)
-                status = "ringing" if target_online else "missed"
+                status = "ringing"
                 db = get_db()
                 db.execute(
                     """
@@ -785,21 +785,20 @@ async def websocket_endpoint(
                 db.commit()
                 db.close()
 
-                if target_online:
-                    active_calls[call_id] = {
-                        "call_id": call_id,
-                        "caller_id": user_id,
-                        "target_id": target_id,
-                        "status": "ringing",
-                        "created_at": created_at,
-                        "ring_expires_at": ring_expires_at,
-                        "negotiation_expires_at": None,
-                        "connection_expires_at": None,
-                        "caller_token": token,
-                        "target_token": user_access_tokens.get(target_id),
-                    }
-                    active_call_users[user_id] = call_id
-                    active_call_users[target_id] = call_id
+                active_calls[call_id] = {
+                    "call_id": call_id,
+                    "caller_id": user_id,
+                    "target_id": target_id,
+                    "status": "ringing",
+                    "created_at": created_at,
+                    "ring_expires_at": ring_expires_at,
+                    "negotiation_expires_at": None,
+                    "connection_expires_at": None,
+                    "caller_token": token,
+                    "target_token": user_access_tokens.get(target_id),
+                }
+                active_call_users[user_id] = call_id
+                active_call_users[target_id] = call_id
 
                 await websocket.send_json({
                     "type": "call_started",
@@ -817,6 +816,15 @@ async def websocket_endpoint(
                         "ring_expires_at": ring_expires_at,
                         "from_id": user_id,
                     })
+                else:
+                    send_call_notification(
+                        target_id=target_id,
+                        caller_id=user_id,
+                        caller_name=str(
+                            message.get("caller_name", "مستخدم CN CALL")
+                        ),
+                        call_id=call_id,
+                    )
                 continue
 
             record = active_calls.get(call_id)
