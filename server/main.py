@@ -8,6 +8,7 @@ import json
 import os
 import re
 import sqlite3
+import shutil
 import uuid
 
 import firebase_admin
@@ -26,7 +27,15 @@ app.add_middleware(
 
 
 BASE_DIR = Path(__file__).resolve().parent
-DB_PATH = BASE_DIR / "cn_call.db"
+VOLUME_DIR = Path("/app/data")
+DB_PATH = VOLUME_DIR / "cn_call.db"
+LEGACY_DB_PATH = BASE_DIR / "cn_call.db"
+
+VOLUME_DIR.mkdir(parents=True, exist_ok=True)
+
+if not DB_PATH.exists() and LEGACY_DB_PATH.exists():
+    shutil.copy2(LEGACY_DB_PATH, DB_PATH)
+    print("[CN CALL][DB] Legacy database migrated to Railway Volume")
 
 
 connections: dict[str, WebSocket] = {}
