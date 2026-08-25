@@ -8,6 +8,7 @@ import json
 import os
 import re
 import sqlite3
+import time
 import shutil
 import uuid
 
@@ -536,13 +537,19 @@ async def websocket_endpoint(
             message_type = str(message.get("type", "")).strip()
             call_id = str(message.get("call_id", "")).strip()
 
+            ring_expires_at = message.get("ring_expires_at")
+
             if message_type == "call" and not call_id:
                 call_id = str(uuid.uuid4())
 
-            if call_id:
+            if message_type == "call" and not ring_expires_at:
+                ring_expires_at = int(time.time() * 1000) + 90000
+
+            if call_id or ring_expires_at:
                 message = {
                     **message,
                     "call_id": call_id,
+                    "ring_expires_at": ring_expires_at,
                 }
 
             if target_id and target_id in connections:
@@ -557,6 +564,7 @@ async def websocket_endpoint(
                     "call_id": call_id,
                     "target_id": target_id,
                     "from_id": user_id,
+                    "ring_expires_at": ring_expires_at,
                 })
 
             if (

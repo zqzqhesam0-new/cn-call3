@@ -18,6 +18,11 @@ class WebRtcCall {
   bool get active => _peer != null;
 
   Future<void> start() async {
+    await Helper.setAndroidAudioConfiguration(
+      AndroidAudioConfiguration.communication,
+    );
+    await Helper.setSpeakerphoneOn(false);
+
     if (!_rendererReady) {
       await remoteRenderer.initialize();
       _rendererReady = true;

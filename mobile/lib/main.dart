@@ -1,21 +1,33 @@
 import 'package:flutter/foundation.dart';
 
 import 'dart:async';
+
+import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
-import 'package:firebase_core/firebase_core.dart';import 'firebase_options.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+
+import 'firebase_options.dart';
 
 import 'services/call_session.dart';
 import 'services/firebase_messaging_service.dart';
 import 'services/account_api.dart';
 import 'services/rtc_call_manager.dart';
+import 'services/callkit_service.dart';
+
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
+
+  FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+
   await FirebaseMessagingService.instance.initialize();
+
+  await CallKitService.instance.initialize();
 
   RtcCallManager.instance.startListening();
 
@@ -36,6 +48,7 @@ class _CNCallAppState extends State<CNCallApp> {
   @override
   void initState() {
     super.initState();
+
     _restoreSession();
   }
 
@@ -67,14 +80,12 @@ class _CNCallAppState extends State<CNCallApp> {
       home: _loading
           ? const Scaffold(
               body: Center(
-                child: CircularProgressIndicator(
-                  color: Color(0xFF00E676),
-                ),
+                child: CircularProgressIndicator(color: Color(0xFF00E676)),
               ),
             )
           : _hasSession
-              ? const HomeScreen()
-              : const LoginScreen(),
+          ? const HomeScreen()
+          : const LoginScreen(),
     );
   }
 }
@@ -106,9 +117,7 @@ class _LoginScreenState extends State<LoginScreen> {
   void openRegister() {
     Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (_) => const RegisterScreen(),
-      ),
+      MaterialPageRoute(builder: (_) => const RegisterScreen()),
     );
   }
 
@@ -131,10 +140,7 @@ class _LoginScreenState extends State<LoginScreen> {
       return;
     }
 
-    final result = await AccountApi.login(
-      userId: userId,
-      password: password,
-    );
+    final result = await AccountApi.login(userId: userId, password: password);
 
     if (!mounted) return;
 
@@ -142,8 +148,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
     if (!success) {
       _message(
-        result['message']?.toString() ??
-            'ID المستخدم أو كلمة المرور غير صحيحة',
+        result['message']?.toString() ?? 'ID المستخدم أو كلمة المرور غير صحيحة',
       );
       return;
     }
@@ -166,18 +171,13 @@ class _LoginScreenState extends State<LoginScreen> {
       return;
     }
 
-    CallSession.instance.login(
-      id: loggedUserId,
-      name: username,
-    );
+    CallSession.instance.login(id: loggedUserId, name: username);
 
     await FirebaseMessagingService.instance.refreshTokenForCurrentUser();
 
     Navigator.pushReplacement(
       context,
-      MaterialPageRoute(
-        builder: (_) => const HomeScreen(),
-      ),
+      MaterialPageRoute(builder: (_) => const HomeScreen()),
     );
   }
 
@@ -185,8 +185,9 @@ class _LoginScreenState extends State<LoginScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(text),
-        backgroundColor:
-            success ? const Color(0xFF00A85A) : Colors.red.shade800,
+        backgroundColor: success
+            ? const Color(0xFF00A85A)
+            : Colors.red.shade800,
       ),
     );
   }
@@ -199,10 +200,7 @@ class _LoginScreenState extends State<LoginScreen> {
         body: SafeArea(
           child: Center(
             child: SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 24,
-                vertical: 40,
-              ),
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 430),
                 child: Column(
@@ -264,10 +262,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
                     const SizedBox(height: 24),
 
-                    _PrimaryButton(
-                      text: 'تسجيل الدخول',
-                      onPressed: login,
-                    ),
+                    _PrimaryButton(text: 'تسجيل الدخول', onPressed: login),
 
                     const SizedBox(height: 12),
 
@@ -278,9 +273,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         onPressed: openRegister,
                         style: OutlinedButton.styleFrom(
                           foregroundColor: Colors.white,
-                          side: BorderSide(
-                            color: Colors.grey.shade800,
-                          ),
+                          side: BorderSide(color: Colors.grey.shade800),
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(18),
                           ),
@@ -351,47 +344,114 @@ class _HomeScreenState extends State<HomeScreen> {
     final rtcManager = RtcCallManager.instance;
     rtcManager.startListening();
 
-    void showIncomingCall(Map<String, dynamic> call) {
+    final acceptedCallerId =
+      CallKitService.instance.lastAcceptedCallerId ??
+      (RtcCallManager.instance.state == CallState.accepted
+        ? RtcCallManager.instance.remoteUserId
+        : null);
+
+    if (acceptedCallerId != null && acceptedCallerId.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => CallScreen(
+              name: 'مستخدم CN CALL',
+              id: acceptedCallerId,
+            ),
+          ),
+        );
+
+        CallKitService.instance.lastAcceptedCallerId = null;
+      });
+    }
+
+    CallKitService.instance.onAccepted = (callerId) {
       if (!mounted) return;
-
-      final callerId = call['caller_id']?.toString() ??
-          call['from_id']?.toString() ??
-          '';
-
-      final callerName =
-          call['caller_name']?.toString() ?? 'مستخدم CN CALL';
-
-      if (callerId.isEmpty) return;
-      if (_incomingCallScreenOpen) return;
-
-      _addHistory(
-        name: callerName,
-        id: callerId,
-        incoming: true,
-      );
-
-      _incomingCallScreenOpen = true;
 
       Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (_) => IncomingCallScreen(
-            name: callerName,
+          builder: (_) => CallScreen(
+            name: 'مستخدم CN CALL',
             id: callerId,
           ),
         ),
-      ).then((_) {
-        if (mounted) {
-          _incomingCallScreenOpen = false;
-        }
-      });
+      );
+    };
+
+    void showIncomingCall(Map<String, dynamic> call) {
+      if (!mounted) return;
+
+      final callerId =
+          call['caller_id']?.toString() ?? call['from_id']?.toString() ?? '';
+
+      final callerName = call['caller_name']?.toString() ?? 'مستخدم CN CALL';
+
+      if (callerId.isEmpty) return;
+      if (_incomingCallScreenOpen) return;
+
+      _addHistory(name: callerName, id: callerId, incoming: true);
+
+      _incomingCallScreenOpen = true;
+
+      if (kIsWeb) {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => IncomingCallScreen(
+              name: callerName,
+              id: callerId,
+            ),
+          ),
+        ).whenComplete(() {
+          if (mounted) {
+            _incomingCallScreenOpen = false;
+          }
+        });
+      } else {
+        CallKitService.instance
+            .showIncomingCall(
+              callId: call['call_id']?.toString() ?? '',
+              callerId: callerId,
+              callerName: callerName,
+            )
+            .whenComplete(() {
+              if (mounted) {
+                _incomingCallScreenOpen = false;
+              }
+            });
+      }
     }
 
     // المكالمات القادمة مباشرة عبر WebSocket.
     rtcManager.onIncomingCall = showIncomingCall;
 
+    rtcManager.onRemoteCallCancelled = (callId) async {
+      await CallKitService.instance.forceEndCall(callId);
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('pending_incoming_call');
+      await prefs.remove('cn_call_pending_callkit_action');
+      await prefs.remove('cn_call_pending_callkit_caller_id');
+      await prefs.remove('cn_call_pending_callkit_call_id');
+      await prefs.remove('cn_call_pending_callkit_target_id');
+
+      _closeIncomingCallScreen();
+    };
+
     // المكالمات التي وصلت عبر FCM أثناء إغلاق التطبيق.
     CallSession.instance.incomingCalls.listen(showIncomingCall);
+
+    Future.microtask(() async {
+      final pendingCall =
+          await CallSession.instance.takePendingIncomingCall();
+      if (mounted && pendingCall != null) {
+        showIncomingCall(pendingCall);
+      }
+    });
 
     rtcManager.onDisconnected = () {
       _closeIncomingCallScreen();
@@ -464,10 +524,7 @@ class _HomeScreenState extends State<HomeScreen> {
     await prefs.setStringList(
       'cn_call_contacts',
       _contacts
-          .map(
-            (contact) =>
-                '${contact['id']!}|${contact['name']!}',
-          )
+          .map((contact) => '${contact['id']!}|${contact['name']!}')
           .toList(),
     );
   }
@@ -531,9 +588,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (!mounted) return;
 
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('جهة الاتصال موجودة بالفعل'),
-        ),
+        const SnackBar(content: Text('جهة الاتصال موجودة بالفعل')),
       );
 
       return;
@@ -542,10 +597,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (!mounted) return;
 
     setState(() {
-      _contacts.add({
-        'id': id,
-        'name': name,
-      });
+      _contacts.add({'id': id, 'name': name});
     });
 
     await _saveContacts();
@@ -562,9 +614,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _deleteContact(String id) async {
     setState(() {
-      _contacts.removeWhere(
-        (contact) => contact['id'] == id,
-      );
+      _contacts.removeWhere((contact) => contact['id'] == id);
     });
 
     await _saveContacts();
@@ -583,18 +633,14 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (id.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('أدخل ID المستخدم الذي تريد الاتصال به'),
-        ),
+        const SnackBar(content: Text('أدخل ID المستخدم الذي تريد الاتصال به')),
       );
       return;
     }
 
     if (int.tryParse(id) == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('ID المستخدم يجب أن يكون أرقامًا فقط'),
-        ),
+        const SnackBar(content: Text('ID المستخدم يجب أن يكون أرقامًا فقط')),
       );
       return;
     }
@@ -602,37 +648,26 @@ class _HomeScreenState extends State<HomeScreen> {
     final session = CallSession.instance;
 
     if (!session.loggedIn) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('يجب تسجيل الدخول أولًا'),
-        ),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('يجب تسجيل الدخول أولًا')));
       return;
     }
 
     final name = 'المستخدم $id';
 
-    await _addHistory(
-      name: name,
-      id: id,
-      incoming: false,
-    );
+    await _addHistory(name: name, id: id, incoming: false);
 
     RtcCallManager.instance.startListening();
 
-    await RtcCallManager.instance.startCall(
-      targetId: id,
-    );
+    await RtcCallManager.instance.startCall(targetId: id);
 
     if (!mounted) return;
 
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => CallScreen(
-          name: name,
-          id: id,
-        ),
+        builder: (_) => CallScreen(name: name, id: id),
       ),
     );
   }
@@ -654,10 +689,7 @@ class _HomeScreenState extends State<HomeScreen> {
           elevation: 0,
           title: const Text(
             'CN CALL',
-            style: TextStyle(
-              fontWeight: FontWeight.w800,
-              letterSpacing: 1.5,
-            ),
+            style: TextStyle(fontWeight: FontWeight.w800, letterSpacing: 1.5),
           ),
           actions: [
             IconButton(
@@ -680,13 +712,11 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                       actions: [
                         TextButton(
-                          onPressed: () =>
-                              Navigator.pop(dialogContext, false),
+                          onPressed: () => Navigator.pop(dialogContext, false),
                           child: const Text('إلغاء'),
                         ),
                         FilledButton(
-                          onPressed: () =>
-                              Navigator.pop(dialogContext, true),
+                          onPressed: () => Navigator.pop(dialogContext, true),
                           style: FilledButton.styleFrom(
                             backgroundColor: Colors.red,
                           ),
@@ -704,9 +734,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 if (!mounted) return;
 
                 navigator.pushAndRemoveUntil(
-                  MaterialPageRoute(
-                    builder: (_) => const LoginScreen(),
-                  ),
+                  MaterialPageRoute(builder: (_) => const LoginScreen()),
                   (route) => false,
                 );
               },
@@ -716,26 +744,17 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         body: SafeArea(
           child: _loadingData
-              ? const Center(
-                  child: CircularProgressIndicator(),
-                )
+              ? const Center(child: CircularProgressIndicator())
               : SingleChildScrollView(
-                  padding: const EdgeInsets.fromLTRB(
-                    20,
-                    10,
-                    20,
-                    30,
-                  ),
+                  padding: const EdgeInsets.fromLTRB(20, 10, 20, 30),
                   child: Column(
-                    crossAxisAlignment:
-                        CrossAxisAlignment.stretch,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       Container(
                         padding: const EdgeInsets.all(22),
                         decoration: BoxDecoration(
                           color: const Color(0xFF151515),
-                          borderRadius:
-                              BorderRadius.circular(24),
+                          borderRadius: BorderRadius.circular(24),
                           border: Border.all(
                             color: const Color(0xFF00E676)
                                 .withValues(alpha: .18),
@@ -760,8 +779,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             const SizedBox(width: 16),
                             Expanded(
                               child: Column(
-                                crossAxisAlignment:
-                                    CrossAxisAlignment.start,
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   const Text(
                                     'مرحبًا بك',
@@ -772,22 +790,19 @@ class _HomeScreenState extends State<HomeScreen> {
                                   ),
                                   const SizedBox(height: 4),
                                   Text(
-                                    CallSession.instance
-                                            .displayName ??
+                                    CallSession.instance.displayName ??
                                         'مستخدم CN CALL',
                                     style: const TextStyle(
                                       color: Colors.white,
                                       fontSize: 22,
-                                      fontWeight:
-                                          FontWeight.w800,
+                                      fontWeight: FontWeight.w800,
                                     ),
                                   ),
                                   const SizedBox(height: 4),
                                   Text(
                                     'ID: ${CallSession.instance.userId ?? ''}',
                                     style: const TextStyle(
-                                      color:
-                                          Color(0xFF00E676),
+                                      color: Color(0xFF00E676),
                                       fontSize: 13,
                                     ),
                                   ),
@@ -826,8 +841,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         label: 'ID المستخدم',
                         hint: 'مثال: 2',
                         icon: Icons.badge_outlined,
-                        keyboardType:
-                            TextInputType.number,
+                        keyboardType: TextInputType.number,
                       ),
 
                       const SizedBox(height: 14),
@@ -840,8 +854,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       const SizedBox(height: 30),
 
                       Row(
-                        mainAxisAlignment:
-                            MainAxisAlignment.spaceBetween,
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           const Text(
                             'جهات الاتصال',
@@ -853,10 +866,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           ),
                           TextButton.icon(
                             onPressed: _addContact,
-                            icon: const Icon(
-                              Icons.person_add_alt_1,
-                              size: 18,
-                            ),
+                            icon: const Icon(Icons.person_add_alt_1, size: 18),
                             label: const Text('إضافة'),
                           ),
                         ],
@@ -875,13 +885,9 @@ class _HomeScreenState extends State<HomeScreen> {
                             name: contact['name']!,
                             id: contact['id']!,
                             online: false,
-                            onDelete: () =>
-                                _deleteContact(
-                              contact['id']!,
-                            ),
+                            onDelete: () => _deleteContact(contact['id']!),
                             onCall: () async {
-                              callIdController.text =
-                                  contact['id']!;
+                              callIdController.text = contact['id']!;
 
                               await startCall();
                             },
@@ -891,8 +897,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       const SizedBox(height: 24),
 
                       Row(
-                        mainAxisAlignment:
-                            MainAxisAlignment.spaceBetween,
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           const Text(
                             'آخر المكالمات',
@@ -918,17 +923,18 @@ class _HomeScreenState extends State<HomeScreen> {
                           text: 'لا يوجد سجل مكالمات',
                         )
                       else
-                        ..._callHistory.take(20).map(
-                          (item) => _CallHistoryItem(
-                            name: item['name']?.toString() ??
-                                'مستخدم CN CALL',
-                            id: item['id']?.toString() ?? '',
-                            time: item['time']?.toString() ??
-                                '',
-                            incoming:
-                                item['incoming'] == true,
-                          ),
-                        ),
+                        ..._callHistory
+                            .take(20)
+                            .map(
+                              (item) => _CallHistoryItem(
+                                name:
+                                    item['name']?.toString() ??
+                                    'مستخدم CN CALL',
+                                id: item['id']?.toString() ?? '',
+                                time: item['time']?.toString() ?? '',
+                                incoming: item['incoming'] == true,
+                              ),
+                            ),
                     ],
                   ),
                 ),
@@ -942,10 +948,7 @@ class _EmptyState extends StatelessWidget {
   final IconData icon;
   final String text;
 
-  const _EmptyState({
-    required this.icon,
-    required this.text,
-  });
+  const _EmptyState({required this.icon, required this.text});
 
   @override
   Widget build(BuildContext context) {
@@ -958,27 +961,16 @@ class _EmptyState extends StatelessWidget {
       ),
       child: Column(
         children: [
-          Icon(
-            icon,
-            size: 36,
-            color: Colors.grey.shade700,
-          ),
+          Icon(icon, size: 36, color: Colors.grey.shade700),
           const SizedBox(height: 10),
-          Text(
-            text,
-            style: TextStyle(
-              color: Colors.grey.shade600,
-            ),
-          ),
+          Text(text, style: TextStyle(color: Colors.grey.shade600)),
         ],
       ),
     );
   }
 }
 
-Future<Map<String, String>?> _showAddContactDialog(
-  BuildContext context,
-) async {
+Future<Map<String, String>?> _showAddContactDialog(BuildContext context) async {
   final idController = TextEditingController();
   final nameController = TextEditingController();
 
@@ -994,10 +986,7 @@ Future<Map<String, String>?> _showAddContactDialog(
           ),
           title: const Text(
             'إضافة جهة اتصال',
-            style: TextStyle(
-              color: Colors.white,
-              fontWeight: FontWeight.w800,
-            ),
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800),
           ),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -1009,8 +998,7 @@ Future<Map<String, String>?> _showAddContactDialog(
                 decoration: InputDecoration(
                   labelText: 'ID المستخدم',
                   hintText: 'مثال: 2',
-                  prefixIcon:
-                      const Icon(Icons.badge_outlined),
+                  prefixIcon: const Icon(Icons.badge_outlined),
                 ),
               ),
               const SizedBox(height: 12),
@@ -1019,54 +1007,36 @@ Future<Map<String, String>?> _showAddContactDialog(
                 decoration: const InputDecoration(
                   labelText: 'اسم المستخدم',
                   hintText: 'مثال: هشام',
-                  prefixIcon:
-                      Icon(Icons.person_outline),
+                  prefixIcon: Icon(Icons.person_outline),
                 ),
               ),
             ],
           ),
           actions: [
             TextButton(
-              onPressed: () =>
-                  Navigator.pop(dialogContext),
+              onPressed: () => Navigator.pop(dialogContext),
               child: const Text('إلغاء'),
             ),
             FilledButton.icon(
               onPressed: () {
-                final id =
-                    idController.text.trim();
-                final name =
-                    nameController.text.trim();
+                final id = idController.text.trim();
+                final name = nameController.text.trim();
 
-                if (id.isEmpty ||
-                    int.tryParse(id) == null ||
-                    name.isEmpty) {
-                  ScaffoldMessenger.of(context)
-                      .showSnackBar(
+                if (id.isEmpty || int.tryParse(id) == null || name.isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
-                      content: Text(
-                        'أدخل ID صحيحًا واسم المستخدم',
-                      ),
+                      content: Text('أدخل ID صحيحًا واسم المستخدم'),
                     ),
                   );
                   return;
                 }
 
-                Navigator.pop(
-                  dialogContext,
-                  {
-                    'id': id,
-                    'name': name,
-                  },
-                );
+                Navigator.pop(dialogContext, {'id': id, 'name': name});
               },
-              icon: const Icon(
-                Icons.person_add_alt_1,
-              ),
+              icon: const Icon(Icons.person_add_alt_1),
               label: const Text('إضافة'),
               style: FilledButton.styleFrom(
-                backgroundColor:
-                    const Color(0xFF00E676),
+                backgroundColor: const Color(0xFF00E676),
                 foregroundColor: Colors.black,
               ),
             ),
@@ -1105,9 +1075,7 @@ class _ContactItem extends StatelessWidget {
       decoration: BoxDecoration(
         color: const Color(0xFF151515),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: Colors.white.withValues(alpha: .04),
-        ),
+        border: Border.all(color: Colors.white.withValues(alpha: .04)),
       ),
       child: Row(
         children: [
@@ -1116,19 +1084,14 @@ class _ContactItem extends StatelessWidget {
             height: 48,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: const Color(0xFF00E676)
-                  .withValues(alpha: .10),
+              color: const Color(0xFF00E676).withValues(alpha: .10),
             ),
-            child: const Icon(
-              Icons.person,
-              color: Color(0xFF00E676),
-            ),
+            child: const Icon(Icons.person, color: Color(0xFF00E676)),
           ),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
-              crossAxisAlignment:
-                  CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
                   name,
@@ -1140,10 +1103,7 @@ class _ContactItem extends StatelessWidget {
                 const SizedBox(height: 4),
                 Text(
                   'ID: $id',
-                  style: TextStyle(
-                    color: Colors.grey.shade600,
-                    fontSize: 12,
-                  ),
+                  style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
                 ),
               ],
             ),
@@ -1151,54 +1111,35 @@ class _ContactItem extends StatelessWidget {
           IconButton(
             tooltip: 'اتصال',
             onPressed: onCall,
-            icon: const Icon(
-              Icons.call,
-              color: Color(0xFF00E676),
-            ),
+            icon: const Icon(Icons.call, color: Color(0xFF00E676)),
           ),
           IconButton(
             tooltip: 'حذف',
             onPressed: () async {
-              final confirmed =
-                  await showDialog<bool>(
+              final confirmed = await showDialog<bool>(
                 context: context,
                 builder: (dialogContext) {
                   return AlertDialog(
-                    backgroundColor:
-                        const Color(0xFF151515),
+                    backgroundColor: const Color(0xFF151515),
                     title: const Text(
                       'حذف جهة الاتصال',
-                      textDirection:
-                          TextDirection.rtl,
+                      textDirection: TextDirection.rtl,
                     ),
                     content: Text(
                       'هل تريد حذف $name؟',
-                      textDirection:
-                          TextDirection.rtl,
+                      textDirection: TextDirection.rtl,
                     ),
                     actions: [
                       TextButton(
-                        onPressed: () =>
-                            Navigator.pop(
-                          dialogContext,
-                          false,
-                        ),
-                        child:
-                            const Text('إلغاء'),
+                        onPressed: () => Navigator.pop(dialogContext, false),
+                        child: const Text('إلغاء'),
                       ),
                       FilledButton(
-                        onPressed: () =>
-                            Navigator.pop(
-                          dialogContext,
-                          true,
+                        onPressed: () => Navigator.pop(dialogContext, true),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: Colors.red.shade800,
                         ),
-                        style:
-                            FilledButton.styleFrom(
-                          backgroundColor:
-                              Colors.red.shade800,
-                        ),
-                        child:
-                            const Text('حذف'),
+                        child: const Text('حذف'),
                       ),
                     ],
                   );
@@ -1209,10 +1150,7 @@ class _ContactItem extends StatelessWidget {
                 onDelete();
               }
             },
-            icon: const Icon(
-              Icons.delete_outline,
-              color: Colors.redAccent,
-            ),
+            icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
           ),
         ],
       ),
@@ -1224,11 +1162,7 @@ class IncomingCallScreen extends StatefulWidget {
   final String name;
   final String id;
 
-  const IncomingCallScreen({
-    super.key,
-    required this.name,
-    required this.id,
-  });
+  const IncomingCallScreen({super.key, required this.name, required this.id});
 
   @override
   State<IncomingCallScreen> createState() => _IncomingCallScreenState();
@@ -1240,23 +1174,17 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
     super.initState();
   }
 
-
   Future<void> acceptCall(BuildContext context) async {
     RtcCallManager.instance.startListening();
 
-    await RtcCallManager.instance.acceptCall(
-      callerId: widget.id,
-    );
+    await RtcCallManager.instance.acceptCall(callerId: widget.id);
 
     if (!context.mounted) return;
 
     Navigator.pushReplacement(
       context,
       MaterialPageRoute(
-        builder: (_) => CallScreen(
-          name: widget.name,
-          id: widget.id,
-        ),
+        builder: (_) => CallScreen(name: widget.name, id: widget.id),
       ),
     );
   }
@@ -1268,9 +1196,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
       Navigator.pop(context);
     }
 
-    await RtcCallManager.instance.rejectCall(
-      callerId: widget.id,
-    );
+    await RtcCallManager.instance.rejectCall(callerId: widget.id);
   }
 
   @override
@@ -1340,20 +1266,14 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
 
               Text(
                 'ID: ${widget.id}',
-                style: TextStyle(
-                  color: Colors.grey.shade600,
-                  fontSize: 13,
-                ),
+                style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
               ),
 
               const SizedBox(height: 16),
 
               Text(
                 'يتصل بك الآن...',
-                style: TextStyle(
-                  color: Colors.grey.shade500,
-                  fontSize: 14,
-                ),
+                style: TextStyle(color: Colors.grey.shade500, fontSize: 14),
               ),
 
               const Spacer(),
@@ -1461,11 +1381,7 @@ class CallScreen extends StatefulWidget {
   final String name;
   final String id;
 
-  const CallScreen({
-    super.key,
-    required this.name,
-    required this.id,
-  });
+  const CallScreen({super.key, required this.name, required this.id});
 
   @override
   State<CallScreen> createState() => _CallScreenState();
@@ -1519,16 +1435,13 @@ class _CallScreenState extends State<CallScreen> {
   void _startTimer() {
     if (_timer != null) return;
 
-    _timer = Timer.periodic(
-      const Duration(seconds: 1),
-      (_) {
-        if (!mounted || !connected) return;
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted || !connected) return;
 
-        setState(() {
-          seconds++;
-        });
-      },
-    );
+      setState(() {
+        seconds++;
+      });
+    });
   }
 
   String get durationText {
@@ -1617,175 +1530,165 @@ class _CallScreenState extends State<CallScreen> {
                 children: [
                   const SizedBox(height: 24),
 
-              Row(
-                children: [
-                  IconButton(
-                    onPressed: endCall,
-                    icon: const Icon(
-                      Icons.keyboard_arrow_down,
-                      color: Colors.white,
-                      size: 30,
-                    ),
-                  ),
-                  const Expanded(
-                    child: Center(
-                      child: Text(
-                        'CAFEE NET',
-                        style: TextStyle(
+                  Row(
+                    children: [
+                      IconButton(
+                        onPressed: endCall,
+                        icon: const Icon(
+                          Icons.keyboard_arrow_down,
                           color: Colors.white,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: 1.5,
+                          size: 30,
                         ),
                       ),
-                    ),
-                  ),
-                  const SizedBox(width: 48),
-                ],
-              ),
-
-              const Spacer(),
-
-              Container(
-                width: 128,
-                height: 128,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: const Color(0xFF00E676).withValues(alpha: .08),
-                  border: Border.all(
-                    color: const Color(0xFF00E676).withValues(alpha: .35),
-                    width: 2,
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: const Color(0xFF00E676).withValues(alpha: .12),
-                      blurRadius: 35,
-                      spreadRadius: 8,
-                    ),
-                  ],
-                ),
-                child: const Icon(
-                  Icons.person,
-                  size: 62,
-                  color: Color(0xFF00E676),
-                ),
-              ),
-
-              const SizedBox(height: 28),
-
-              Text(
-                widget.name,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 27,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-
-              const SizedBox(height: 8),
-
-              Text(
-                'ID: ${widget.id}',
-                style: TextStyle(
-                  color: Colors.grey.shade600,
-                  fontSize: 13,
-                ),
-              ),
-
-              const SizedBox(height: 18),
-
-              Text(
-                durationText,
-                style: const TextStyle(
-                  color: Color(0xFF00E676),
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 1.5,
-                ),
-              ),
-
-              const SizedBox(height: 8),
-
-              AnimatedSwitcher(
-                duration: const Duration(milliseconds: 300),
-                child: Text(
-                  connected ? 'متصل الآن' : 'جاري الاتصال...',
-                  key: ValueKey(connected),
-                  style: TextStyle(
-                    color: connected
-                        ? const Color(0xFF00E676)
-                        : Colors.grey.shade500,
-                    fontSize: 14,
-                    fontWeight: connected
-                        ? FontWeight.w600
-                        : FontWeight.normal,
-                  ),
-                ),
-              ),
-
-              const Spacer(),
-
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 34),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    _CallControlButton(
-                      icon: muted
-                          ? Icons.mic_off
-                          : Icons.mic_none,
-                      label: muted ? 'إلغاء الكتم' : 'كتم',
-                      active: muted,
-                      onPressed: toggleMute,
-                    ),
-                    _CallControlButton(
-                      icon: speaker
-                          ? Icons.volume_up
-                          : Icons.volume_down,
-                      label: 'مكبر الصوت',
-                      active: speaker,
-                      onPressed: toggleSpeaker,
-                    ),
-                  ],
-                ),
-              ),
-
-              const SizedBox(height: 34),
-
-              GestureDetector(
-                onTap: endCall,
-                child: Container(
-                  width: 70,
-                  height: 70,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: Colors.red.shade700,
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.red.withValues(alpha: .22),
-                        blurRadius: 25,
-                        spreadRadius: 3,
+                      const Expanded(
+                        child: Center(
+                          child: Text(
+                            'CAFEE NET',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 1.5,
+                            ),
+                          ),
+                        ),
                       ),
+                      const SizedBox(width: 48),
                     ],
                   ),
-                  child: const Icon(
-                    Icons.call_end,
-                    color: Colors.white,
-                    size: 32,
+
+                  const Spacer(),
+
+                  Container(
+                    width: 128,
+                    height: 128,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: const Color(0xFF00E676).withValues(alpha: .08),
+                      border: Border.all(
+                        color: const Color(0xFF00E676).withValues(alpha: .35),
+                        width: 2,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFF00E676).withValues(alpha: .12),
+                          blurRadius: 35,
+                          spreadRadius: 8,
+                        ),
+                      ],
+                    ),
+                    child: const Icon(
+                      Icons.person,
+                      size: 62,
+                      color: Color(0xFF00E676),
+                    ),
                   ),
-                ),
-              ),
 
-              const SizedBox(height: 12),
+                  const SizedBox(height: 28),
 
-              Text(
-                'إنهاء المكالمة',
-                style: TextStyle(
-                  color: Colors.grey.shade600,
-                  fontSize: 12,
-                ),
-              ),
+                  Text(
+                    widget.name,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 27,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
 
-              const SizedBox(height: 38),
+                  const SizedBox(height: 8),
+
+                  Text(
+                    'ID: ${widget.id}',
+                    style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
+                  ),
+
+                  const SizedBox(height: 18),
+
+                  Text(
+                    durationText,
+                    style: const TextStyle(
+                      color: Color(0xFF00E676),
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 1.5,
+                    ),
+                  ),
+
+                  const SizedBox(height: 8),
+
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 300),
+                    child: Text(
+                      connected ? 'متصل الآن' : 'جاري الاتصال...',
+                      key: ValueKey(connected),
+                      style: TextStyle(
+                        color: connected
+                            ? const Color(0xFF00E676)
+                            : Colors.grey.shade500,
+                        fontSize: 14,
+                        fontWeight: connected
+                            ? FontWeight.w600
+                            : FontWeight.normal,
+                      ),
+                    ),
+                  ),
+
+                  const Spacer(),
+
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 34),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                      children: [
+                        _CallControlButton(
+                          icon: muted ? Icons.mic_off : Icons.mic_none,
+                          label: muted ? 'إلغاء الكتم' : 'كتم',
+                          active: muted,
+                          onPressed: toggleMute,
+                        ),
+                        _CallControlButton(
+                          icon: speaker ? Icons.volume_up : Icons.volume_down,
+                          label: 'مكبر الصوت',
+                          active: speaker,
+                          onPressed: toggleSpeaker,
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  const SizedBox(height: 34),
+
+                  GestureDetector(
+                    onTap: endCall,
+                    child: Container(
+                      width: 70,
+                      height: 70,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Colors.red.shade700,
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.red.withValues(alpha: .22),
+                            blurRadius: 25,
+                            spreadRadius: 3,
+                          ),
+                        ],
+                      ),
+                      child: const Icon(
+                        Icons.call_end,
+                        color: Colors.white,
+                        size: 32,
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(height: 12),
+
+                  Text(
+                    'إنهاء المكالمة',
+                    style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+                  ),
+
+                  const SizedBox(height: 38),
                 ],
               ),
             ],
@@ -1819,9 +1722,7 @@ class _CallControlButton extends StatelessWidget {
             backgroundColor: active
                 ? const Color(0xFF00E676).withValues(alpha: .18)
                 : const Color(0xFF151515),
-            foregroundColor: active
-                ? const Color(0xFF00E676)
-                : Colors.white,
+            foregroundColor: active ? const Color(0xFF00E676) : Colors.white,
             fixedSize: const Size(58, 58),
           ),
           icon: Icon(icon),
@@ -1829,10 +1730,7 @@ class _CallControlButton extends StatelessWidget {
         const SizedBox(height: 8),
         Text(
           label,
-          style: TextStyle(
-            color: Colors.grey.shade600,
-            fontSize: 11,
-          ),
+          style: TextStyle(color: Colors.grey.shade600, fontSize: 11),
         ),
       ],
     );
@@ -1891,20 +1789,14 @@ class _CallHistoryItem extends StatelessWidget {
                 const SizedBox(height: 3),
                 Text(
                   'ID: $id',
-                  style: TextStyle(
-                    color: Colors.grey.shade600,
-                    fontSize: 12,
-                  ),
+                  style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
                 ),
               ],
             ),
           ),
           Text(
             time,
-            style: TextStyle(
-              color: Colors.grey.shade600,
-              fontSize: 11,
-            ),
+            style: TextStyle(color: Colors.grey.shade600, fontSize: 11),
           ),
         ],
       ),
@@ -1988,9 +1880,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     final success = result['success'] == true;
     final message =
         result['message']?.toString() ??
-        (success
-            ? 'تم إنشاء الحساب بنجاح'
-            : 'تعذر إنشاء الحساب');
+        (success ? 'تم إنشاء الحساب بنجاح' : 'تعذر إنشاء الحساب');
 
     _message(message, success: success);
 
@@ -2007,8 +1897,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(text),
-        backgroundColor:
-            success ? const Color(0xFF00A85A) : Colors.red.shade800,
+        backgroundColor: success
+            ? const Color(0xFF00A85A)
+            : Colors.red.shade800,
       ),
     );
   }
@@ -2108,8 +1999,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       suffix: IconButton(
                         onPressed: () {
                           setState(() {
-                            hideConfirmPassword =
-                                !hideConfirmPassword;
+                            hideConfirmPassword = !hideConfirmPassword;
                           });
                         },
                         icon: Icon(
@@ -2133,9 +2023,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       onPressed: () => Navigator.pop(context),
                       child: const Text(
                         'لدي حساب بالفعل',
-                        style: TextStyle(
-                          color: Color(0xFF00E676),
-                        ),
+                        style: TextStyle(color: Color(0xFF00E676)),
                       ),
                     ),
 
@@ -2166,16 +2054,9 @@ class _Logo extends StatelessWidget {
       decoration: BoxDecoration(
         shape: BoxShape.circle,
         color: const Color(0xFF00E676).withValues(alpha: .10),
-        border: Border.all(
-          color: const Color(0xFF00E676),
-          width: 2,
-        ),
+        border: Border.all(color: const Color(0xFF00E676), width: 2),
       ),
-      child: const Icon(
-        Icons.call,
-        size: 40,
-        color: Color(0xFF00E676),
-      ),
+      child: const Icon(Icons.call, size: 40, color: Color(0xFF00E676)),
     );
   }
 }
@@ -2219,9 +2100,7 @@ class _Field extends StatelessWidget {
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(18),
-          borderSide: const BorderSide(
-            color: Color(0xFF00E676),
-          ),
+          borderSide: const BorderSide(color: Color(0xFF00E676)),
         ),
       ),
     );
@@ -2232,10 +2111,7 @@ class _PrimaryButton extends StatelessWidget {
   final String text;
   final VoidCallback onPressed;
 
-  const _PrimaryButton({
-    required this.text,
-    required this.onPressed,
-  });
+  const _PrimaryButton({required this.text, required this.onPressed});
 
   @override
   Widget build(BuildContext context) {
@@ -2253,10 +2129,7 @@ class _PrimaryButton extends StatelessWidget {
         ),
         child: Text(
           text,
-          style: const TextStyle(
-            fontSize: 17,
-            fontWeight: FontWeight.bold,
-          ),
+          style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
         ),
       ),
     );

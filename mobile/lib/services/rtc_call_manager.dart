@@ -1,7 +1,21 @@
 import 'dart:async';
 
+import 'package:audioplayers/audioplayers.dart';
+import 'package:uuid/uuid.dart';
+
 import 'call_session.dart';
 import 'webrtc_call.dart';
+
+enum CallState {
+  incoming,
+  accepted,
+  rejected,
+  cancelled,
+  connecting,
+  connected,
+  ended,
+  timeout,
+}
 
 class RtcCallManager {
   RtcCallManager._();
@@ -11,9 +25,15 @@ class RtcCallManager {
   final CallSession session = CallSession.instance;
   final WebRtcCall rtc = WebRtcCall();
 
+  final AudioPlayer _ringPlayer = AudioPlayer();
+  bool _ringing = false;
+  Timer? _ringTimeoutTimer;
+
   StreamSubscription<Map<String, dynamic>>? _subscription;
 
   String? remoteUserId;
+  String? currentCallId;
+  CallState? state;
   bool inCall = false;
   bool caller = false;
 
@@ -23,9 +43,78 @@ class RtcCallManager {
   Function()? onConnected;
   Function()? onDisconnected;
   Function(Map<String, dynamic> message)? onIncomingCall;
+  Function(String callId)? onRemoteCallCancelled;
 
   bool _started = false;
   bool _hangingUp = false;
+
+  Future<void> _startRinging({int? expiresAt}) async {
+    final wasRinging = _ringing;
+
+    _ringing = true;
+
+    _ringTimeoutTimer?.cancel();
+
+    Duration duration = const Duration(seconds: 90);
+
+    if (expiresAt != null) {
+      final remainingMs = expiresAt - DateTime.now().millisecondsSinceEpoch;
+
+      if (remainingMs <= 0) {
+        await _handleRingTimeout();
+        return;
+      }
+
+      final cappedMs = remainingMs > 90000 ? 90000 : remainingMs;
+      duration = Duration(milliseconds: cappedMs);
+    }
+
+    _ringTimeoutTimer = Timer(
+      duration,
+      _handleRingTimeout,
+    );
+
+    try {
+      if (!wasRinging) {
+        await _ringPlayer.stop();
+        await _ringPlayer.setReleaseMode(ReleaseMode.loop);
+        await _ringPlayer.play(
+          AssetSource('sounds/ringing.mp3'),
+        );
+        print('[CN CALL][RING] started');
+      }
+    } catch (e) {
+      _ringing = false;
+      _ringTimeoutTimer?.cancel();
+      _ringTimeoutTimer = null;
+      print('[CN CALL][RING] start error: $e');
+    }
+  }
+
+  Future<void> _stopRinging() async {
+    _ringTimeoutTimer?.cancel();
+    _ringTimeoutTimer = null;
+
+    if (!_ringing) return;
+
+    _ringing = false;
+
+    try {
+      await _ringPlayer.stop();
+      print('[CN CALL][RING] stopped');
+    } catch (e) {
+      print('[CN CALL][RING] stop error: $e');
+    }
+  }
+
+  Future<void> _handleRingTimeout() async {
+    if (!caller || inCall || currentCallId == null) return;
+
+    print('[CN CALL][RING] timeout reached');
+
+    await hangup(sendSignal: true);
+    state = CallState.timeout;
+  }
 
   void startListening() {
     if (_started) return;
@@ -39,6 +128,7 @@ class RtcCallManager {
 
       session.socket.send({
         'type': 'ice_candidate',
+        'call_id': currentCallId,
         'target_id': target,
         'from_id': session.userId,
         'candidate': candidate.candidate,
@@ -49,6 +139,7 @@ class RtcCallManager {
 
     rtc.onConnected = () {
       inCall = true;
+      state = CallState.connected;
       onConnected?.call();
     };
 
@@ -69,9 +160,26 @@ class RtcCallManager {
     final type = message['type']?.toString();
 
     if (type == 'call') {
+      currentCallId = message['call_id']?.toString();
+      state = CallState.incoming;
       remoteUserId = message['from_id']?.toString();
 
       onIncomingCall?.call(message);
+      return;
+    }
+
+    if (type == 'call_started') {
+      currentCallId = message['call_id']?.toString();
+
+      final expiresAtRaw = message['ring_expires_at'];
+      final expiresAt = expiresAtRaw is int
+          ? expiresAtRaw
+          : int.tryParse(expiresAtRaw?.toString() ?? '');
+
+      if (caller && _ringing && expiresAt != null) {
+        await _startRinging(expiresAt: expiresAt);
+      }
+
       return;
     }
 
@@ -95,8 +203,21 @@ class RtcCallManager {
       return;
     }
 
+    if (type == 'call_cancelled') {
+      final cancelledCallId =
+          message['call_id']?.toString() ?? currentCallId;
+
+      if (cancelledCallId != null && cancelledCallId.isNotEmpty) {
+        onRemoteCallCancelled?.call(cancelledCallId);
+      }
+
+      await hangup(sendSignal: false);
+      return;
+    }
+
     if (type == 'hangup' || type == 'call_reject') {
       await hangup(sendSignal: false);
+      state = type == 'call_reject' ? CallState.rejected : CallState.ended;
       return;
     }
   }
@@ -110,6 +231,8 @@ class RtcCallManager {
     await hangup(sendSignal: false);
 
     remoteUserId = targetId;
+    currentCallId = const Uuid().v4();
+    state = CallState.connecting;
     caller = true;
     inCall = false;
     _remoteDescriptionSet = false;
@@ -119,16 +242,22 @@ class RtcCallManager {
 
     session.socket.send({
       'type': 'call',
+      'call_id': currentCallId,
       'target_id': targetId,
       'caller_name': session.displayName ?? 'Hesam',
       'from_id': myId,
     });
+
+    await _startRinging();
   }
 
   Future<void> acceptCall({
     required String callerId,
+    String? callId,
   }) async {
     remoteUserId = callerId;
+    currentCallId = callId ?? currentCallId;
+    state = CallState.accepted;
     caller = false;
     inCall = false;
     _remoteDescriptionSet = false;
@@ -138,12 +267,15 @@ class RtcCallManager {
 
     session.socket.send({
       'type': 'call_accept',
+      'call_id': currentCallId,
       'target_id': callerId,
     });
   }
 
   Future<void> _handleAccepted() async {
     if (!caller) return;
+
+    await _stopRinging();
 
     final target = remoteUserId;
     if (target == null) return;
@@ -152,6 +284,7 @@ class RtcCallManager {
 
     session.socket.send({
       'type': 'offer',
+      'call_id': currentCallId,
       'target_id': target,
       'from_id': session.userId,
       'sdp': offer.sdp,
@@ -167,6 +300,7 @@ class RtcCallManager {
     if (fromId == null || sdp == null || type == null) return;
 
     remoteUserId = fromId;
+    state = CallState.connecting;
 
     if (!rtc.active) {
       await rtc.start();
@@ -182,6 +316,7 @@ class RtcCallManager {
 
     session.socket.send({
       'type': 'answer',
+      'call_id': currentCallId,
       'target_id': fromId,
       'from_id': session.userId,
       'sdp': answer.sdp,
@@ -251,13 +386,16 @@ class RtcCallManager {
 
   Future<void> rejectCall({
     required String callerId,
+    String? callId,
   }) async {
     session.socket.send({
       'type': 'call_reject',
+      'call_id': callId ?? currentCallId,
       'target_id': callerId,
     });
 
     await hangup(sendSignal: false);
+    state = CallState.rejected;
   }
 
   Future<void> hangup({
@@ -266,12 +404,16 @@ class RtcCallManager {
     if (_hangingUp) return;
 
     _hangingUp = true;
+    await _stopRinging();
 
     final target = remoteUserId;
+    final callId = currentCallId;
+    final shouldCancel = caller && !inCall && callId != null;
 
     if (sendSignal && target != null) {
       session.socket.send({
-        'type': 'hangup',
+        'type': shouldCancel ? 'call_cancelled' : 'hangup',
+        'call_id': callId,
         'target_id': target,
       });
     }
@@ -282,6 +424,8 @@ class RtcCallManager {
     _remoteDescriptionSet = false;
 
     remoteUserId = null;
+    currentCallId = null;
+    state = shouldCancel ? CallState.cancelled : CallState.ended;
     inCall = false;
     caller = false;
 

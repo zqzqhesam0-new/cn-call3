@@ -13,6 +13,7 @@ firebase.initializeApp({
 const messaging = firebase.messaging();
 
 messaging.onBackgroundMessage((payload) => {
+  console.log("[CN CALL] BACKGROUND RECEIVED", payload);
   console.log("[CN CALL] FCM background message:", payload);
 
   const notification = payload.notification || {};

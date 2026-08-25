@@ -1,30 +1,72 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'call_session.dart';
+import 'callkit_service.dart';
 import 'server_config.dart';
 
 @pragma('vm:entry-point')
-Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+Future<void> firebaseMessagingBackgroundHandler(
+  RemoteMessage message,
+) async {
   print('FCM BACKGROUND MESSAGE: ${message.messageId}');
   print('FCM BACKGROUND DATA: ${message.data}');
 
+  await Firebase.initializeApp();
+
   final prefs = await SharedPreferences.getInstance();
 
-  if (message.data['type'] == 'incoming_call') {
+  final type = message.data['type']?.toString();
+
+  if (type == 'incoming_call') {
+    final callerId =
+        message.data['caller_id']?.toString() ??
+        message.data['from_id']?.toString() ??
+        '';
+
+    if (callerId.isEmpty) {
+      print('FCM BACKGROUND: missing caller_id');
+      return;
+    }
+
     await prefs.setString(
       'pending_incoming_call',
       jsonEncode(message.data),
     );
+
+    try {
+      final callId = message.data['call_id']?.toString();
+      final callerName =
+          message.data['caller_name']?.toString() ?? 'CN CALL';
+        final targetId = message.data['target_id']?.toString() ?? '';
+      if (callId == null || callId.isEmpty) return;
+
+      await CallKitService.instance.showIncomingCall(
+        callId: callId,
+        callerId: callerId,
+        callerName: callerName,
+        targetId: targetId,
+      );
+      print('FCM BACKGROUND: CallKit incoming call shown');
+    } catch (e) {
+      print('FCM BACKGROUND CALLKIT ERROR: $e');
+    }
+
+    return;
   }
 
-  if (message.data['type'] == 'call_cancelled') {
+  if (type == 'call_cancelled') {
+    final callId = message.data['call_id']?.toString();
+    if (callId != null && callId.isNotEmpty) {
+      await CallKitService.instance.endCall(callId);
+    }
     await prefs.remove('pending_incoming_call');
-    print('FCM: removed pending incoming call');
+    print('FCM BACKGROUND: removed pending incoming call');
   }
 }
 
@@ -34,7 +76,8 @@ class FirebaseMessagingService {
   static final FirebaseMessagingService instance =
       FirebaseMessagingService._();
 
-  final FirebaseMessaging _messaging = FirebaseMessaging.instance;
+  final FirebaseMessaging _messaging =
+      FirebaseMessaging.instance;
 
   StreamSubscription<String>? _tokenSubscription;
   StreamSubscription<RemoteMessage>? _messageSubscription;
@@ -45,11 +88,8 @@ class FirebaseMessagingService {
 
   Future<String?> initialize() async {
     try {
-      FirebaseMessaging.onBackgroundMessage(
-        firebaseMessagingBackgroundHandler,
-      );
-
-      final settings = await _messaging.requestPermission(
+      final settings =
+          await _messaging.requestPermission(
         alert: true,
         badge: true,
         sound: true,
@@ -57,7 +97,8 @@ class FirebaseMessagingService {
       );
 
       print(
-        'FCM notification permission: ${settings.authorizationStatus}',
+        'FCM notification permission: '
+        '${settings.authorizationStatus}',
       );
 
       _token = await _messaging.getToken();
@@ -70,7 +111,8 @@ class FirebaseMessagingService {
 
       await _tokenSubscription?.cancel();
 
-      _tokenSubscription = _messaging.onTokenRefresh.listen(
+      _tokenSubscription =
+          _messaging.onTokenRefresh.listen(
         (token) async {
           _token = token;
 
@@ -84,48 +126,46 @@ class FirebaseMessagingService {
 
       _messageSubscription =
           FirebaseMessaging.onMessage.listen(
-        (RemoteMessage message) {
+        (RemoteMessage message) async {
           print(
-            'FCM FOREGROUND MESSAGE: ${message.messageId}',
+            'FCM FOREGROUND MESSAGE: '
+            '${message.messageId}',
           );
 
           print(
-            'FCM DATA: ${message.data}',
+            'FCM FOREGROUND DATA: '
+            '${message.data}',
           );
-        },
-      );
 
-      FirebaseMessaging.onMessageOpenedApp.listen(
-        (RemoteMessage message) {
-          print('FCM OPENED APP');
-          print(message.data);
-
-          if (message.data['type'] == 'incoming_call') {
-            CallSession.instance.incomingCallFromNotification(
-              Map<String, dynamic>.from(message.data),
-            );
+          if (message.data['type'] != 'incoming_call') {
+            return;
           }
+
+          final callerId =
+              message.data['caller_id']?.toString() ??
+              message.data['from_id']?.toString() ??
+              '';
+
+          final callerName =
+              message.data['caller_name']?.toString() ??
+              'CN CALL';
+            final targetId = message.data['target_id']?.toString() ?? '';
+
+          if (callerId.isEmpty) return;
+
+          final callId = message.data['call_id']?.toString();
+          if (callId == null || callId.isEmpty) return;
+
+          if (CallSession.instance.socket.connected) return;
+
+          await CallKitService.instance.showIncomingCall(
+            callId: callId,
+            callerId: callerId,
+            callerName: callerName,
+            targetId: targetId,
+          );
         },
       );
-
-      final initialMessage =
-          await FirebaseMessaging.instance.getInitialMessage();
-
-      if (initialMessage != null) {
-        print('FCM INITIAL MESSAGE');
-        print(initialMessage.data);
-
-        if (initialMessage.data['type'] == 'incoming_call') {
-          final prefs = await SharedPreferences.getInstance();
-
-          await prefs.setString(
-            'pending_incoming_call',
-            jsonEncode(initialMessage.data),
-          );
-
-          print('FCM: saved initial incoming call');
-        }
-      }
 
       return _token;
     } catch (e) {
@@ -134,17 +174,23 @@ class FirebaseMessagingService {
     }
   }
 
-  Future<void> _sendTokenToServer(String token) async {
+  Future<void> _sendTokenToServer(
+    String token,
+  ) async {
     final userId = CallSession.instance.userId;
 
     if (userId == null || userId.isEmpty) {
-      print('FCM: user not logged in yet');
+      print(
+        'FCM: user not logged in yet',
+      );
       return;
     }
 
     try {
       final response = await http.post(
-        Uri.parse('${ServerConfig.httpUrl}/fcm-token'),
+        Uri.parse(
+          '${ServerConfig.httpUrl}/fcm-token',
+        ),
         headers: {
           'Content-Type': 'application/json',
         },
@@ -155,11 +201,13 @@ class FirebaseMessagingService {
       );
 
       print(
-        'FCM TOKEN SERVER RESPONSE: ${response.statusCode}',
+        'FCM TOKEN SERVER RESPONSE: '
+        '${response.statusCode}',
       );
 
       print(
-        'FCM TOKEN SERVER BODY: ${response.body}',
+        'FCM TOKEN SERVER BODY: '
+        '${response.body}',
       );
     } catch (e) {
       print(
@@ -169,14 +217,24 @@ class FirebaseMessagingService {
   }
 
   Future<void> refreshTokenForCurrentUser() async {
-    print('FCM REFRESH CURRENT TOKEN: $_token');
+    try {
+      final token = await _messaging.getToken();
 
-    if (_token == null || _token!.isEmpty) {
-      print('FCM TOKEN EMPTY');
-      return;
+      if (token == null || token.isEmpty) {
+        print('FCM REFRESH: no token');
+        return;
+      }
+
+      _token = token;
+
+      print('FCM REFRESH TOKEN: $token');
+
+      await _sendTokenToServer(token);
+    } catch (e) {
+      print(
+        'FCM REFRESH ERROR: $e',
+      );
     }
-
-    await _sendTokenToServer(_token!);
   }
 
   Future<void> dispose() async {

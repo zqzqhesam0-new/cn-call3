@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'call_socket.dart';
+import 'rtc_call_manager.dart';
 
 class CallSession {
   CallSession._();
@@ -24,10 +25,7 @@ class CallSession {
 
   bool get loggedIn => userId != null;
 
-  Future<void> login({
-    required String id,
-    required String name,
-  }) async {
+  Future<void> login({required String id, required String name}) async {
     userId = id;
     displayName = name;
 
@@ -55,44 +53,67 @@ class CallSession {
 
     await socket.connect(id);
 
-    // استعادة أي مكالمة وصلت أثناء إغلاق التطبيق.
-    final pendingCall = prefs.getString('pending_incoming_call');
+    // تنفيذ أي Accept/Reject وصل من CallKit أثناء إغلاق التطبيق.
+    await processPendingCallKitAction();
 
-    if (pendingCall != null && pendingCall.isNotEmpty) {
-      try {
-        final data = jsonDecode(pendingCall);
-
-        if (data is Map) {
-          _incomingCalls.add(
-            Map<String, dynamic>.from(data),
-          );
-        }
-
-        await prefs.remove('pending_incoming_call');
-      } catch (e) {
-        print('PENDING CALL RESTORE ERROR: $e');
-      }
-    }
+    // Keep an unhandled incoming call until HomeScreen has registered its
+    // broadcast listener and can consume it through takePendingIncomingCall.
 
     // استقبال رسائل المكالمات يتم الآن بواسطة RtcCallManager.
 
     return true;
   }
 
-  Future<void> incomingCallFromNotification(
-    Map<String, dynamic> data,
-  ) async {
+  Future<void> incomingCallFromNotification(Map<String, dynamic> data) async {
     try {
       final prefs = await SharedPreferences.getInstance();
 
-      await prefs.setString(
-        'pending_incoming_call',
-        jsonEncode(data),
-      );
+      await prefs.setString('pending_incoming_call', jsonEncode(data));
 
       _incomingCalls.add(data);
     } catch (e) {
       print('SAVE INCOMING CALL ERROR: $e');
+    }
+  }
+
+  Future<void> processPendingCallKitAction() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+
+      final action = prefs.getString('cn_call_pending_callkit_action');
+      final callerId =
+          prefs.getString('cn_call_pending_callkit_caller_id');
+        final callId =
+          prefs.getString('cn_call_pending_callkit_call_id');
+
+      if (action == null ||
+          action.isEmpty ||
+          callerId == null ||
+          callerId.isEmpty) {
+        return;
+      }
+
+      if (action == 'accept') {
+        await RtcCallManager.instance.acceptCall(
+          callerId: callerId,
+          callId: callId,
+        );
+      } else if (action == 'reject') {
+        await RtcCallManager.instance.rejectCall(
+          callerId: callerId,
+          callId: callId,
+        );
+      } else {
+        return;
+      }
+
+      // Delete the pending action only after the operation succeeds.
+      await prefs.remove('cn_call_pending_callkit_action');
+      await prefs.remove('cn_call_pending_callkit_caller_id');
+      await prefs.remove('cn_call_pending_callkit_call_id');
+      await prefs.remove('pending_incoming_call');
+    } catch (e) {
+      print('PROCESS PENDING CALLKIT ACTION ERROR: $e');
     }
   }
 

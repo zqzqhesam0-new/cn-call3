@@ -7,6 +7,18 @@ import 'server_config.dart';
 
 class CallSocket {
   WebSocketChannel? _channel;
+  String? _userId;
+  Timer? _reconnectTimer;
+  bool _connecting = false;
+  int _reconnectAttempt = 0;
+
+  final List<Map<String, dynamic>> _pendingMessages = [];
+
+  static const _queuedTypes = {
+    'call_accept',
+    'call_reject',
+    'call_cancelled',
+  };
 
   bool get connected => _channel != null;
 
@@ -17,6 +29,10 @@ class CallSocket {
 
   Future<void> connect(String userId) async {
     if (_channel != null) return;
+    _userId = userId;
+    if (_channel != null || _connecting) return;
+
+    _connecting = true;
 
     final channel = WebSocketChannel.connect(
       Uri.parse(ServerConfig.websocketUrl(userId)),
@@ -26,8 +42,11 @@ class CallSocket {
       await channel.ready;
 
       _channel = channel;
+      _connecting = false;
+      _reconnectAttempt = 0;
 
       print('SOCKET CONNECTED: ${ServerConfig.websocketUrl(userId)}');
+      _flushPendingMessages();
 
       channel.stream.listen(
         (message) {
@@ -51,6 +70,7 @@ class CallSocket {
           if (identical(_channel, channel)) {
             _channel = null;
           }
+          _scheduleReconnect();
         },
         onError: (error, stackTrace) {
           print('SOCKET ERROR: $error');
@@ -58,6 +78,7 @@ class CallSocket {
           if (identical(_channel, channel)) {
             _channel = null;
           }
+          _scheduleReconnect();
         },
         cancelOnError: false,
       );
@@ -70,10 +91,37 @@ class CallSocket {
         _channel = null;
       }
 
+      _connecting = false;
+      _scheduleReconnect();
+
       rethrow;
     }
   }
 
+  void _scheduleReconnect() {
+    final userId = _userId;
+    if (userId == null || userId.isEmpty || _reconnectTimer != null) return;
+
+    final delaySeconds = 1 << (_reconnectAttempt.clamp(0, 5));
+    _reconnectAttempt++;
+
+    _reconnectTimer = Timer(Duration(seconds: delaySeconds), () async {
+      _reconnectTimer = null;
+      try {
+        await connect(userId);
+      } catch (_) {
+        _scheduleReconnect();
+      }
+    });
+  }
+
+  void _flushPendingMessages() {
+    final pending = List<Map<String, dynamic>>.from(_pendingMessages);
+    _pendingMessages.clear();
+    for (final message in pending) {
+      _channel?.sink.add(jsonEncode(message));
+    }
+  }
   void send(Map<String, dynamic> data) {
     final channel = _channel;
 
@@ -81,6 +129,13 @@ class CallSocket {
 
     if (channel == null) {
       print('SOCKET NOT CONNECTED');
+      if (_queuedTypes.contains(data['type'])) {
+        _pendingMessages.add(Map<String, dynamic>.from(data));
+        final userId = _userId;
+        if (userId != null) {
+          _scheduleReconnect();
+        }
+      }
       return;
     }
 
@@ -88,6 +143,9 @@ class CallSocket {
   }
 
   void disconnect() {
+    _userId = null;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
     _channel?.sink.close();
     _channel = null;
   }
@@ -95,6 +153,8 @@ class CallSocket {
   Future<void> dispose() async {
     await _messages.close();
 
+    _userId = null;
+    _reconnectTimer?.cancel();
     _channel?.sink.close();
     _channel = null;
   }
