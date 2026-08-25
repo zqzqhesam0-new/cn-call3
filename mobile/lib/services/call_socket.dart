@@ -8,17 +8,12 @@ import 'server_config.dart';
 class CallSocket {
   WebSocketChannel? _channel;
   String? _userId;
+  String? _token;
   Timer? _reconnectTimer;
   bool _connecting = false;
+  bool _reconnectEnabled = true;
   int _reconnectAttempt = 0;
-
-  final List<Map<String, dynamic>> _pendingMessages = [];
-
-  static const _queuedTypes = {
-    'call_accept',
-    'call_reject',
-    'call_cancelled',
-  };
+  Future<void> Function()? onSessionInvalid;
 
   bool get connected => _channel != null;
 
@@ -27,15 +22,17 @@ class CallSocket {
 
   Stream<Map<String, dynamic>> get messages => _messages.stream;
 
-  Future<void> connect(String userId) async {
+  Future<void> connect(String userId, String token) async {
     if (_channel != null) return;
     _userId = userId;
+    _token = token;
+    _reconnectEnabled = true;
     if (_channel != null || _connecting) return;
 
     _connecting = true;
 
     final channel = WebSocketChannel.connect(
-      Uri.parse(ServerConfig.websocketUrl(userId)),
+      Uri.parse('${ServerConfig.websocketUrl(userId)}?token=$token'),
     );
 
     try {
@@ -56,7 +53,15 @@ class CallSocket {
             if (data is Map) {
               final parsed = Map<String, dynamic>.from(data);
 
-              print('SOCKET RECEIVE: $parsed');
+              if (parsed['type'] == 'session_invalid') {
+                _handleSessionInvalid();
+                return;
+              }
+
+              print(
+                'SOCKET RECEIVE: type=${parsed['type']} '
+                'call_id=${parsed['call_id']}',
+              );
 
               _messages.add(parsed);
             }
@@ -70,7 +75,7 @@ class CallSocket {
           if (identical(_channel, channel)) {
             _channel = null;
           }
-          _scheduleReconnect();
+          if (_reconnectEnabled) _scheduleReconnect();
         },
         onError: (error, stackTrace) {
           print('SOCKET ERROR: $error');
@@ -78,7 +83,7 @@ class CallSocket {
           if (identical(_channel, channel)) {
             _channel = null;
           }
-          _scheduleReconnect();
+          if (_reconnectEnabled) _scheduleReconnect();
         },
         cancelOnError: false,
       );
@@ -92,7 +97,7 @@ class CallSocket {
       }
 
       _connecting = false;
-      _scheduleReconnect();
+      if (_reconnectEnabled) _scheduleReconnect();
 
       rethrow;
     }
@@ -100,7 +105,15 @@ class CallSocket {
 
   void _scheduleReconnect() {
     final userId = _userId;
-    if (userId == null || userId.isEmpty || _reconnectTimer != null) return;
+    final token = _token;
+    if (!_reconnectEnabled ||
+      userId == null ||
+        userId.isEmpty ||
+        token == null ||
+        token.isEmpty ||
+        _reconnectTimer != null) {
+      return;
+    }
 
     final delaySeconds = 1 << (_reconnectAttempt.clamp(0, 5));
     _reconnectAttempt++;
@@ -108,7 +121,7 @@ class CallSocket {
     _reconnectTimer = Timer(Duration(seconds: delaySeconds), () async {
       _reconnectTimer = null;
       try {
-        await connect(userId);
+        await connect(userId, token);
       } catch (_) {
         _scheduleReconnect();
       }
@@ -116,26 +129,17 @@ class CallSocket {
   }
 
   void _flushPendingMessages() {
-    final pending = List<Map<String, dynamic>>.from(_pendingMessages);
-    _pendingMessages.clear();
-    for (final message in pending) {
-      _channel?.sink.add(jsonEncode(message));
-    }
+    // Control messages must not be replayed after reconnect.
   }
   void send(Map<String, dynamic> data) {
     final channel = _channel;
 
-    print('SOCKET SEND: $data');
+    print(
+      'SOCKET SEND: type=${data['type']} call_id=${data['call_id']}',
+    );
 
     if (channel == null) {
       print('SOCKET NOT CONNECTED');
-      if (_queuedTypes.contains(data['type'])) {
-        _pendingMessages.add(Map<String, dynamic>.from(data));
-        final userId = _userId;
-        if (userId != null) {
-          _scheduleReconnect();
-        }
-      }
       return;
     }
 
@@ -143,7 +147,9 @@ class CallSocket {
   }
 
   void disconnect() {
+    _reconnectEnabled = false;
     _userId = null;
+    _token = null;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
     _channel?.sink.close();
@@ -151,11 +157,24 @@ class CallSocket {
   }
 
   Future<void> dispose() async {
+    _reconnectEnabled = false;
     await _messages.close();
 
     _userId = null;
+    _token = null;
     _reconnectTimer?.cancel();
     _channel?.sink.close();
     _channel = null;
+  }
+
+  void _handleSessionInvalid() {
+    _reconnectEnabled = false;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+    _connecting = false;
+    final channel = _channel;
+    _channel = null;
+    channel?.sink.close();
+    onSessionInvalid?.call();
   }
 }

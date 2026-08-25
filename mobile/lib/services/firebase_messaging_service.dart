@@ -4,7 +4,6 @@ import 'dart:convert';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
 
 import 'call_session.dart';
 import 'callkit_service.dart';
@@ -15,15 +14,21 @@ Future<void> firebaseMessagingBackgroundHandler(
   RemoteMessage message,
 ) async {
   print('FCM BACKGROUND MESSAGE: ${message.messageId}');
-  print('FCM BACKGROUND DATA: ${message.data}');
 
   await Firebase.initializeApp();
-
-  final prefs = await SharedPreferences.getInstance();
 
   final type = message.data['type']?.toString();
 
   if (type == 'incoming_call') {
+    final callId = message.data['call_id']?.toString();
+    if (callId == null ||
+      callId.isEmpty ||
+        await CallSession.instance.isCallEnded(callId) ||
+        await CallSession.instance.hasActiveCall()) {
+      return;
+    }
+    await CallSession.instance.markCallActive(callId);
+
     final callerId =
         message.data['caller_id']?.toString() ??
         message.data['from_id']?.toString() ??
@@ -34,17 +39,12 @@ Future<void> firebaseMessagingBackgroundHandler(
       return;
     }
 
-    await prefs.setString(
-      'pending_incoming_call',
-      jsonEncode(message.data),
-    );
+    await CallSession.instance.incomingCallFromNotification(message.data);
 
     try {
-      final callId = message.data['call_id']?.toString();
       final callerName =
           message.data['caller_name']?.toString() ?? 'CN CALL';
         final targetId = message.data['target_id']?.toString() ?? '';
-      if (callId == null || callId.isEmpty) return;
 
       await CallKitService.instance.showIncomingCall(
         callId: callId,
@@ -62,11 +62,14 @@ Future<void> firebaseMessagingBackgroundHandler(
 
   if (type == 'call_cancelled') {
     final callId = message.data['call_id']?.toString();
-    if (callId != null && callId.isNotEmpty) {
-      await CallKitService.instance.endCall(callId);
-    }
-    await prefs.remove('pending_incoming_call');
-    print('FCM BACKGROUND: removed pending incoming call');
+
+    await CallSession.instance.markCallEnded(callId);
+    await CallKitService.instance.forceEndCall(callId);
+
+    await CallSession.instance.clearPendingIncomingCall(callId);
+    await CallSession.instance.clearPendingCallKitAction(callId);
+
+    print('FCM BACKGROUND: force-closed cancelled call');
   }
 }
 
@@ -103,8 +106,6 @@ class FirebaseMessagingService {
 
       _token = await _messaging.getToken();
 
-      print('FCM TOKEN: $_token');
-
       if (_token != null && _token!.isNotEmpty) {
         await _sendTokenToServer(_token!);
       }
@@ -115,8 +116,6 @@ class FirebaseMessagingService {
           _messaging.onTokenRefresh.listen(
         (token) async {
           _token = token;
-
-          print('FCM TOKEN REFRESHED: $token');
 
           await _sendTokenToServer(token);
         },
@@ -132,12 +131,22 @@ class FirebaseMessagingService {
             '${message.messageId}',
           );
 
-          print(
-            'FCM FOREGROUND DATA: '
-            '${message.data}',
-          );
+          final foregroundType =
+              message.data['type']?.toString();
 
-          if (message.data['type'] != 'incoming_call') {
+          if (foregroundType == 'call_cancelled') {
+            final callId = message.data['call_id']?.toString();
+
+            await CallSession.instance.markCallEnded(callId);
+            await CallKitService.instance.forceEndCall(callId);
+
+            await CallSession.instance.clearPendingIncomingCall(callId);
+            await CallSession.instance.clearPendingCallKitAction(callId);
+
+            return;
+          }
+
+          if (foregroundType != 'incoming_call') {
             return;
           }
 
@@ -155,6 +164,10 @@ class FirebaseMessagingService {
 
           final callId = message.data['call_id']?.toString();
           if (callId == null || callId.isEmpty) return;
+
+          if (await CallSession.instance.isCallEnded(callId)) return;
+          if (await CallSession.instance.hasActiveCall()) return;
+          await CallSession.instance.markCallActive(callId);
 
           if (CallSession.instance.socket.connected) return;
 
@@ -178,8 +191,12 @@ class FirebaseMessagingService {
     String token,
   ) async {
     final userId = CallSession.instance.userId;
+    final accessToken = CallSession.instance.accessToken;
 
-    if (userId == null || userId.isEmpty) {
+    if (userId == null ||
+      userId.isEmpty ||
+      accessToken == null ||
+      accessToken.isEmpty) {
       print(
         'FCM: user not logged in yet',
       );
@@ -193,9 +210,9 @@ class FirebaseMessagingService {
         ),
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': 'Bearer $accessToken',
         },
         body: jsonEncode({
-          'user_id': userId,
           'token': token,
         }),
       );
@@ -226,8 +243,6 @@ class FirebaseMessagingService {
       }
 
       _token = token;
-
-      print('FCM REFRESH TOKEN: $token');
 
       await _sendTokenToServer(token);
     } catch (e) {

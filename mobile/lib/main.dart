@@ -49,7 +49,21 @@ class _CNCallAppState extends State<CNCallApp> {
   void initState() {
     super.initState();
 
+    CallSession.instance.onSessionInvalidated = _handleSessionInvalidated;
     _restoreSession();
+  }
+
+  void _handleSessionInvalidated() {
+    if (!mounted) return;
+    setState(() {
+      _hasSession = false;
+    });
+  }
+
+  @override
+  void dispose() {
+    CallSession.instance.onSessionInvalidated = null;
+    super.dispose();
   }
 
   Future<void> _restoreSession() async {
@@ -162,16 +176,23 @@ class _LoginScreenState extends State<LoginScreen> {
 
     final loggedUserId = user['user_id']?.toString();
     final username = user['username']?.toString();
+    final accessToken = result['access_token']?.toString();
 
     if (loggedUserId == null ||
         loggedUserId.isEmpty ||
         username == null ||
-        username.isEmpty) {
+        username.isEmpty ||
+        accessToken == null ||
+        accessToken.isEmpty) {
       _message('بيانات المستخدم ناقصة');
       return;
     }
 
-    CallSession.instance.login(id: loggedUserId, name: username);
+    await CallSession.instance.login(
+      id: loggedUserId,
+      name: username,
+      token: accessToken,
+    );
 
     await FirebaseMessagingService.instance.refreshTokenForCurrentUser();
 
@@ -340,6 +361,7 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
 
     _loadLocalData();
+    _loadMissedCalls();
 
     final rtcManager = RtcCallManager.instance;
     rtcManager.startListening();
@@ -404,6 +426,7 @@ class _HomeScreenState extends State<HomeScreen> {
             builder: (_) => IncomingCallScreen(
               name: callerName,
               id: callerId,
+              callId: call['call_id']?.toString() ?? '',
             ),
           ),
         ).whenComplete(() {
@@ -516,6 +539,26 @@ class _HomeScreenState extends State<HomeScreen> {
 
       _loadingData = false;
     });
+  }
+
+  Future<void> _loadMissedCalls() async {
+    final userId = CallSession.instance.userId;
+    if (userId == null || userId.isEmpty) return;
+
+    final missed = await AccountApi.missedCalls(userId: userId);
+    if (!mounted || missed.isEmpty) return;
+
+    for (final call in missed) {
+      final callerId = call['caller_id']?.toString() ?? '';
+      final callerName = call['caller_name']?.toString() ?? 'مستخدم CN CALL';
+      if (callerId.isEmpty) continue;
+      await _addHistory(name: callerName, id: callerId, incoming: true);
+    }
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('لديك مكالمة فائتة')),
+    );
   }
 
   Future<void> _saveContacts() async {
@@ -654,13 +697,35 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
+    if (id == session.userId) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('الاتصال بالنفس غير مسموح')),
+      );
+      return;
+    }
+
+    final manager = RtcCallManager.instance;
+    if (manager.currentCallId != null || manager.inCall) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('لديك مكالمة نشطة بالفعل')),
+      );
+      return;
+    }
+
     final name = 'المستخدم $id';
 
     await _addHistory(name: name, id: id, incoming: false);
 
-    RtcCallManager.instance.startListening();
+    manager.startListening();
 
-    await RtcCallManager.instance.startCall(targetId: id);
+    final started = await manager.startCall(targetId: id);
+    if (!started) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('المستخدم غير متصل حاليًا')),
+      );
+      return;
+    }
 
     if (!mounted) return;
 
@@ -1161,8 +1226,14 @@ class _ContactItem extends StatelessWidget {
 class IncomingCallScreen extends StatefulWidget {
   final String name;
   final String id;
+  final String callId;
 
-  const IncomingCallScreen({super.key, required this.name, required this.id});
+  const IncomingCallScreen({
+    super.key,
+    required this.name,
+    required this.id,
+    required this.callId,
+  });
 
   @override
   State<IncomingCallScreen> createState() => _IncomingCallScreenState();
@@ -1177,7 +1248,10 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
   Future<void> acceptCall(BuildContext context) async {
     RtcCallManager.instance.startListening();
 
-    await RtcCallManager.instance.acceptCall(callerId: widget.id);
+    await RtcCallManager.instance.acceptCall(
+      callerId: widget.id,
+      callId: widget.callId,
+    );
 
     if (!context.mounted) return;
 
@@ -1196,7 +1270,10 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
       Navigator.pop(context);
     }
 
-    await RtcCallManager.instance.rejectCall(callerId: widget.id);
+    await RtcCallManager.instance.rejectCall(
+      callerId: widget.id,
+      callId: widget.callId,
+    );
   }
 
   @override
@@ -1391,6 +1468,7 @@ class _CallScreenState extends State<CallScreen> {
   bool muted = false;
   bool speaker = false;
   bool connected = false;
+  bool? remoteOnline;
   int seconds = 0;
 
   Timer? _timer;
@@ -1401,6 +1479,12 @@ class _CallScreenState extends State<CallScreen> {
     super.initState();
 
     final manager = RtcCallManager.instance;
+    remoteOnline = manager.remoteOnline;
+
+    manager.onRemoteAvailabilityChanged = (online) {
+      if (!mounted) return;
+      setState(() => remoteOnline = online);
+    };
 
     manager.onConnected = () {
       if (!mounted) return;
@@ -1496,6 +1580,7 @@ class _CallScreenState extends State<CallScreen> {
 
     RtcCallManager.instance.onConnected = null;
     RtcCallManager.instance.onDisconnected = null;
+    RtcCallManager.instance.onRemoteAvailabilityChanged = null;
 
     super.dispose();
   }
@@ -1618,8 +1703,12 @@ class _CallScreenState extends State<CallScreen> {
                   AnimatedSwitcher(
                     duration: const Duration(milliseconds: 300),
                     child: Text(
-                      connected ? 'متصل الآن' : 'جاري الاتصال...',
-                      key: ValueKey(connected),
+                      connected
+                          ? 'متصل حاليًا'
+                          : remoteOnline == false
+                          ? 'غير متصل'
+                          : 'يتم الاستقبال',
+                      key: ValueKey('$connected-$remoteOnline'),
                       style: TextStyle(
                         color: connected
                             ? const Color(0xFF00E676)

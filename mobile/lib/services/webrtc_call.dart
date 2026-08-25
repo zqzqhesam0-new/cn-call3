@@ -3,6 +3,7 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 
 import 'server_config.dart';
+import 'call_session.dart';
 
 class WebRtcCall {
   RTCPeerConnection? _peer;
@@ -53,6 +54,9 @@ class WebRtcCall {
     try {
       final response = await http.get(
         Uri.parse('${ServerConfig.httpUrl}/turn-credentials'),
+        headers: {
+          'Authorization': 'Bearer ${CallSession.instance.accessToken}',
+        },
       );
 
       if (response.statusCode == 200) {

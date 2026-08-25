@@ -7,11 +7,14 @@ import 'call_socket.dart';
 import 'rtc_call_manager.dart';
 
 class CallSession {
-  CallSession._();
-
   static final CallSession instance = CallSession._();
 
   final CallSocket socket = CallSocket();
+  Function()? onSessionInvalidated;
+
+  CallSession._() {
+    socket.onSessionInvalid = invalidateSession;
+  }
 
   final StreamController<Map<String, dynamic>> _incomingCalls =
       StreamController<Map<String, dynamic>>.broadcast();
@@ -22,20 +25,92 @@ class CallSession {
 
   String? userId;
   String? displayName;
+  String? accessToken;
 
   bool get loggedIn => userId != null;
 
-  Future<void> login({required String id, required String name}) async {
+  static const _endedCallIdsKey = 'cn_call_ended_call_ids';
+  static const _activeCallIdKey = 'cn_call_active_call_id';
+  static const _activeCallAtKey = 'cn_call_active_call_at';
+
+  Future<bool> hasActiveCall() async {
+    final prefs = await SharedPreferences.getInstance();
+    final activeId = prefs.getString(_activeCallIdKey);
+    final activeAt = prefs.getInt(_activeCallAtKey) ?? 0;
+    if (activeId == null || activeId.isEmpty) return false;
+    if (DateTime.now().millisecondsSinceEpoch - activeAt > 90000) {
+      await prefs.remove(_activeCallIdKey);
+      await prefs.remove(_activeCallAtKey);
+      return false;
+    }
+    return true;
+  }
+
+  Future<void> markCallActive(String callId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_activeCallIdKey, callId);
+    await prefs.setInt(
+      _activeCallAtKey,
+      DateTime.now().millisecondsSinceEpoch,
+    );
+  }
+
+  Future<bool> isCallEnded(String? callId) async {
+    final id = callId?.trim() ?? '';
+    if (id.isEmpty) return true;
+
+    final prefs = await SharedPreferences.getInstance();
+    return (prefs.getStringList(_endedCallIdsKey) ?? <String>[]).contains(id);
+  }
+
+  Future<void> markCallEnded(String? callId) async {
+    final id = callId?.trim() ?? '';
+    if (id.isEmpty) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    final ids = prefs.getStringList(_endedCallIdsKey) ?? <String>[];
+    ids.remove(id);
+    ids.add(id);
+    if (ids.length > 32) ids.removeRange(0, ids.length - 32);
+    await prefs.setStringList(_endedCallIdsKey, ids);
+    if (prefs.getString(_activeCallIdKey) == id) {
+      await prefs.remove(_activeCallIdKey);
+      await prefs.remove(_activeCallAtKey);
+    }
+  }
+
+  Future<void> login({
+    required String id,
+    required String name,
+    required String token,
+  }) async {
     userId = id;
     displayName = name;
+    accessToken = token;
 
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('cn_call_user_id', id);
     await prefs.setString('cn_call_display_name', name);
+    await prefs.setString('cn_call_access_token', token);
 
-    await socket.connect(id);
+    await socket.connect(id, token);
 
     // استقبال رسائل المكالمات يتم الآن بواسطة RtcCallManager.
+  }
+
+  Future<void> invalidateSession() async {
+    await RtcCallManager.instance.endForSession(sendSignal: false);
+    socket.disconnect();
+    userId = null;
+    displayName = null;
+    accessToken = null;
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('cn_call_user_id');
+    await prefs.remove('cn_call_display_name');
+    await prefs.remove('cn_call_access_token');
+
+    onSessionInvalidated?.call();
   }
 
   Future<bool> restoreSession() async {
@@ -43,15 +118,22 @@ class CallSession {
 
     final id = prefs.getString('cn_call_user_id');
     final name = prefs.getString('cn_call_display_name');
+    final token = prefs.getString('cn_call_access_token');
 
-    if (id == null || id.isEmpty || name == null || name.isEmpty) {
+    if (id == null ||
+      id.isEmpty ||
+      name == null ||
+      name.isEmpty ||
+      token == null ||
+      token.isEmpty) {
       return false;
     }
 
     userId = id;
     displayName = name;
+    accessToken = token;
 
-    await socket.connect(id);
+    await socket.connect(id, token);
 
     // تنفيذ أي Accept/Reject وصل من CallKit أثناء إغلاق التطبيق.
     await processPendingCallKitAction();
@@ -67,6 +149,8 @@ class CallSession {
   Future<void> incomingCallFromNotification(Map<String, dynamic> data) async {
     try {
       final prefs = await SharedPreferences.getInstance();
+      final callId = data['call_id']?.toString().trim() ?? '';
+      if (callId.isEmpty || await isCallEnded(callId)) return;
 
       await prefs.setString('pending_incoming_call', jsonEncode(data));
 
@@ -89,7 +173,10 @@ class CallSession {
       if (action == null ||
           action.isEmpty ||
           callerId == null ||
-          callerId.isEmpty) {
+          callerId.isEmpty ||
+          callId == null ||
+          callId.isEmpty ||
+          await isCallEnded(callId)) {
         return;
       }
 
@@ -108,10 +195,8 @@ class CallSession {
       }
 
       // Delete the pending action only after the operation succeeds.
-      await prefs.remove('cn_call_pending_callkit_action');
-      await prefs.remove('cn_call_pending_callkit_caller_id');
-      await prefs.remove('cn_call_pending_callkit_call_id');
-      await prefs.remove('pending_incoming_call');
+      await clearPendingCallKitAction(callId);
+      await clearPendingIncomingCall(callId);
     } catch (e) {
       print('PROCESS PENDING CALLKIT ACTION ERROR: $e');
     }
@@ -132,7 +217,12 @@ class CallSession {
       final data = jsonDecode(pending);
 
       if (data is Map) {
-        return Map<String, dynamic>.from(data);
+        final call = Map<String, dynamic>.from(data);
+        final callId = call['call_id']?.toString();
+        if (callId == null || callId.isEmpty || await isCallEnded(callId)) {
+          return null;
+        }
+        return call;
       }
     } catch (e) {
       print('TAKE PENDING CALL ERROR: $e');
@@ -141,17 +231,51 @@ class CallSession {
     return null;
   }
 
+  Future<void> clearPendingIncomingCall(String? callId) async {
+    if (callId == null || callId.isEmpty) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    final pending = prefs.getString('pending_incoming_call');
+    if (pending == null || pending.isEmpty) return;
+
+    try {
+      final data = jsonDecode(pending);
+      final pendingId = data is Map ? data['call_id']?.toString() : null;
+      if (pendingId == callId) {
+        await prefs.remove('pending_incoming_call');
+      }
+    } catch (_) {
+      await prefs.remove('pending_incoming_call');
+    }
+  }
+
+  Future<void> clearPendingCallKitAction(String? callId) async {
+    if (callId == null || callId.isEmpty) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    final pendingId = prefs.getString('cn_call_pending_callkit_call_id');
+    if (pendingId == callId) {
+      await prefs.remove('cn_call_pending_callkit_action');
+      await prefs.remove('cn_call_pending_callkit_caller_id');
+      await prefs.remove('cn_call_pending_callkit_call_id');
+      await prefs.remove('cn_call_pending_callkit_target_id');
+    }
+  }
+
   Future<void> logout() async {
     await _messageSubscription?.cancel();
     _messageSubscription = null;
+    await RtcCallManager.instance.endForSession();
     socket.disconnect();
 
     userId = null;
     displayName = null;
+    accessToken = null;
 
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('cn_call_user_id');
     await prefs.remove('cn_call_display_name');
+    await prefs.remove('cn_call_access_token');
   }
 
   Future<void> dispose() async {

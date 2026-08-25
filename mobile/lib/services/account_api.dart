@@ -3,10 +3,19 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import 'server_config.dart';
+import 'call_session.dart';
 
 class AccountApi {
   static Uri _uri(String path) {
     return Uri.parse('${ServerConfig.httpUrl}$path');
+  }
+
+  static Map<String, String> _headers() {
+    final token = CallSession.instance.accessToken;
+    return {
+      'Content-Type': 'application/json',
+      if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
+    };
   }
 
   static Future<Map<String, dynamic>> login({
@@ -77,5 +86,26 @@ class AccountApi {
         'message': 'تعذر الاتصال بالسيرفر',
       };
     }
+  }
+
+  static Future<List<Map<String, dynamic>>> missedCalls({
+    required String userId,
+  }) async {
+    try {
+      final response = await http.get(
+        _uri('/calls/missed/$userId'),
+        headers: _headers(),
+      );
+      final data = jsonDecode(response.body);
+      final calls = data is Map ? data['calls'] : null;
+      if (calls is List) {
+        return calls
+            .whereType<Map>()
+            .map((call) => Map<String, dynamic>.from(call))
+            .toList();
+      }
+    } catch (_) {}
+
+    return <Map<String, dynamic>>[];
   }
 }

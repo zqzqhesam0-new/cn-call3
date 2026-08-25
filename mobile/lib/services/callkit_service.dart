@@ -85,6 +85,7 @@ class CallKitService {
         'targetId': targetId ?? '',
       },
       android: const AndroidParams(
+        ringtonePath: 'system_ringtone_default',
         isCustomNotification: true,
         isShowLogo: false,
         isShowCallID: true,
@@ -121,20 +122,36 @@ class CallKitService {
   Future<void> forceEndCall(String? callId) async {
     final id = callId?.trim() ?? '';
 
-    if (id.isNotEmpty) {
-      try {
-        await FlutterCallkitIncoming.endCall(id);
-      } catch (e) {
-        print('[CN CALL][CALLKIT] force end by id failed: $e');
-      }
+    if (id.isEmpty) {
+      await endAllCalls();
+      return;
     }
 
-    // Ensures stale "incoming call" UI is removed even when
-    // the original CallKit ID is missing or already cleared.
+    final params = CallKitParams(
+      id: id,
+      nameCaller: '',
+      appName: 'CN CALL',
+      handle: '',
+    );
+
+    // Stop ringtone immediately.
     try {
-      await FlutterCallkitIncoming.endAllCalls();
+      await FlutterCallkitIncoming.hideCallkitIncoming(params);
     } catch (e) {
-      print('[CN CALL][CALLKIT] force end all failed: $e');
+      print('[CN CALL][CALLKIT] hide incoming failed: $e');
+    }
+
+    // End the native CallKit call as well. On Android this sends
+    // ACTION_CALL_ENDED, which makes CallkitIncomingActivity finish.
+    try {
+      await FlutterCallkitIncoming.endCall(id);
+    } catch (e) {
+      print('[CN CALL][CALLKIT] endCall failed: $e');
+      try {
+        await FlutterCallkitIncoming.endAllCalls();
+      } catch (endAllError) {
+        print('[CN CALL][CALLKIT] endAllCalls failed: $endAllError');
+      }
     }
   }
 

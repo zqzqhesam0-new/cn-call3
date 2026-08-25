@@ -1,4 +1,4 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from pathlib import Path
@@ -40,6 +40,78 @@ if not DB_PATH.exists() and LEGACY_DB_PATH.exists():
 
 
 connections: dict[str, WebSocket] = {}
+active_calls: dict[str, dict[str, object]] = {}
+active_call_users: dict[str, str] = {}
+access_tokens: dict[str, str] = {}
+user_access_tokens: dict[str, str] = {}
+
+
+def release_call(call_id: str, reason: str) -> bool:
+    record = active_calls.pop(call_id, None)
+    if record is None:
+        return False
+
+    caller_id = str(record["caller_id"])
+    target_id = str(record["target_id"])
+    active_call_users.pop(caller_id, None)
+    active_call_users.pop(target_id, None)
+
+    status = reason
+    if reason == "timeout":
+        status = "missed" if record["status"] == "ringing" else "timeout"
+
+    db = get_db()
+    db.execute(
+        "UPDATE call_records SET status = ? WHERE call_id = ?",
+        (status, call_id),
+    )
+    db.commit()
+    db.close()
+    return True
+
+
+def release_calls_for_user(user_id: str, token: str | None = None):
+    call_ids = [
+        call_id
+        for call_id, record in active_calls.items()
+        if user_id in {str(record["caller_id"]), str(record["target_id"])}
+        and (
+            token is None
+            or (
+                user_id == str(record["caller_id"])
+                and token == record["caller_token"]
+            )
+            or (
+                user_id == str(record["target_id"])
+                and token == record["target_token"]
+            )
+        )
+    ]
+    for call_id in call_ids:
+        release_call(call_id, "ended")
+
+
+def expire_active_calls():
+    now = int(time.time() * 1000)
+    expired_ids = {
+        call_id
+        for call_id, record in active_calls.items()
+        if (
+            record["status"] == "ringing"
+            and int(record["ring_expires_at"]) <= now
+        ) or (
+            record["status"] == "accepted"
+            and record["negotiation_expires_at"] is not None
+            and int(record["negotiation_expires_at"]) <= now
+        ) or (
+            record["status"] == "negotiating"
+            and record["connection_expires_at"] is not None
+            and int(record["connection_expires_at"]) <= now
+        )
+    }
+
+    for call_id in expired_ids:
+        release_call(call_id, "timeout")
 
 FCM_TOKENS: dict[str, str] = {}
 
@@ -89,6 +161,20 @@ def init_db():
             user_id TEXT PRIMARY KEY,
             token TEXT NOT NULL,
             updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+    db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS call_records (
+            call_id TEXT PRIMARY KEY,
+            caller_id TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            caller_name TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL,
+            status TEXT NOT NULL
         )
         """
     )
@@ -169,8 +255,26 @@ class LoginRequest(BaseModel):
 
 
 class FcmTokenRequest(BaseModel):
-    user_id: str
     token: str
+
+
+def authenticated_user(authorization: str | None) -> str | None:
+    if not authorization or not authorization.startswith("Bearer "):
+        return None
+
+    token = authorization[7:].strip()
+    return access_tokens.get(token)
+
+
+def issue_access_token(user_id: str) -> str:
+    old_token = user_access_tokens.get(user_id)
+    if old_token:
+        access_tokens.pop(old_token, None)
+
+    token = uuid.uuid4().hex + uuid.uuid4().hex
+    access_tokens[token] = user_id
+    user_access_tokens[user_id] = token
+    return token
 
 
 
@@ -179,18 +283,17 @@ class FcmTokenRequest(BaseModel):
 # ============================================================
 
 @app.post("/fcm-token")
-async def save_fcm_token(request: FcmTokenRequest):
-    user_id = request.user_id.strip()
+async def save_fcm_token(
+    request: FcmTokenRequest,
+    authorization: str | None = Header(default=None),
+):
+    user_id = authenticated_user(authorization)
     token = request.token.strip()
 
-    if not user_id or not token:
-        return {
-            "success": False,
-            "message": "بيانات FCM غير صالحة",
-        }
+    if user_id is None or not token:
+        raise HTTPException(status_code=401, detail="غير مصرح")
 
     FCM_TOKENS[user_id] = token
-    print("SAVED FCM TOKEN USER:", user_id)
 
     db = get_db()
     db.execute(
@@ -228,9 +331,13 @@ async def root():
 
 
 @app.get("/fcm-debug")
-def fcm_debug():
+def fcm_debug(authorization: str | None = Header(default=None)):
+    if authenticated_user(authorization) is None:
+        raise HTTPException(status_code=401, detail="غير مصرح")
+
     return {
-        "memory": FCM_TOKENS,
+        "success": True,
+        "count": len(FCM_TOKENS),
     }
 
 @app.get("/health")
@@ -365,6 +472,17 @@ async def login(request: LoginRequest):
             "message": "ID المستخدم أو كلمة المرور غير صحيحة",
         }
 
+    token = issue_access_token(user["user_id"])
+
+    old_connection = connections.get(user["user_id"])
+    if old_connection is not None:
+        try:
+            await old_connection.close(code=4001)
+        except Exception:
+            pass
+        if connections.get(user["user_id"]) is old_connection:
+            del connections[user["user_id"]]
+
     return {
         "success": True,
         "message": "تم تسجيل الدخول بنجاح",
@@ -372,6 +490,7 @@ async def login(request: LoginRequest):
             "user_id": user["user_id"],
             "username": user["username"],
         },
+        "access_token": token,
     }
 
 
@@ -380,7 +499,12 @@ async def login(request: LoginRequest):
 # ============================================================
 
 @app.get("/users/{user_id}")
-async def get_user(user_id: str):
+async def get_user(
+    user_id: str,
+    authorization: str | None = Header(default=None),
+):
+    if authenticated_user(authorization) is None:
+        raise HTTPException(status_code=401, detail="غير مصرح")
     db = get_db()
 
     user = db.execute(
@@ -407,6 +531,48 @@ async def get_user(user_id: str):
             "username": user["username"],
             "online": user["user_id"] in connections,
         },
+    }
+
+
+@app.get("/calls/missed/{user_id}")
+async def get_missed_calls(
+    user_id: str,
+    authorization: str | None = Header(default=None),
+):
+    authenticated_id = authenticated_user(authorization)
+    if authenticated_id != user_id.strip():
+        raise HTTPException(status_code=403, detail="غير مصرح")
+
+    now = int(time.time() * 1000)
+    db = get_db()
+    db.execute(
+        """
+        UPDATE call_records
+        SET status = 'missed'
+        WHERE target_id = ? AND status = 'ringing' AND expires_at <= ?
+        """,
+        (user_id.strip(), now),
+    )
+    rows = db.execute(
+        """
+        SELECT call_id, caller_id, caller_name, created_at
+        FROM call_records
+        WHERE target_id = ? AND status = 'missed'
+        ORDER BY created_at DESC
+        """,
+        (user_id.strip(),),
+    ).fetchall()
+    db.execute(
+        "UPDATE call_records SET status = 'missed_delivered' "
+        "WHERE target_id = ? AND status = 'missed'",
+        (user_id.strip(),),
+    )
+    db.commit()
+    db.close()
+
+    return {
+        "success": True,
+        "calls": [dict(row) for row in rows],
     }
 
 
@@ -473,7 +639,12 @@ def send_call_notification(
 
 
 @app.get("/turn-credentials")
-async def get_turn_credentials():
+async def get_turn_credentials(
+    authorization: str | None = Header(default=None),
+):
+    if authenticated_user(authorization) is None:
+        raise HTTPException(status_code=401, detail="غير مصرح")
+
     turn_url = os.getenv("TURN_URL", "").strip()
     turn_username = os.getenv("TURN_USERNAME", "").strip()
     turn_password = os.getenv("TURN_PASSWORD", "").strip()
@@ -508,6 +679,16 @@ async def websocket_endpoint(
     websocket: WebSocket,
     user_id: str,
 ):
+    token = websocket.query_params.get("token", "").strip()
+    if access_tokens.get(token) != user_id:
+        await websocket.accept()
+        await websocket.send_json({
+            "type": "session_invalid",
+            "reason": "invalid_session",
+        })
+        await websocket.close(code=1008)
+        return
+
     if user_id in connections:
         try:
             await connections[user_id].close()
@@ -528,73 +709,226 @@ async def websocket_endpoint(
 
         while True:
             message = await websocket.receive_json()
-            print('CALL MESSAGE:', message)
 
-            target_id = str(
-                message.get("target_id", "")
-            ).strip()
+            if access_tokens.get(token) != user_id:
+                release_calls_for_user(user_id, token)
+                await websocket.send_json({
+                    "type": "session_invalid",
+                    "reason": "session_revoked",
+                })
+                await websocket.close(code=1008)
+                return
 
             message_type = str(message.get("type", "")).strip()
             call_id = str(message.get("call_id", "")).strip()
+            target_id = str(message.get("target_id", "")).strip()
+            print("CALL MESSAGE:", message_type, call_id)
 
-            ring_expires_at = message.get("ring_expires_at")
+            expire_active_calls()
 
-            if message_type == "call" and not call_id:
-                call_id = str(uuid.uuid4())
+            if message_type == "call":
+                if not call_id:
+                    call_id = str(uuid.uuid4())
 
-            if message_type == "call" and not ring_expires_at:
-                ring_expires_at = int(time.time() * 1000) + 90000
+                if not target_id or target_id == user_id:
+                    await websocket.send_json({
+                        "type": "call_reject",
+                        "call_id": call_id,
+                        "target_id": user_id,
+                        "reason": "self_call_not_allowed",
+                    })
+                    continue
 
-            if call_id or ring_expires_at:
-                message = {
-                    **message,
-                    "call_id": call_id,
-                    "ring_expires_at": ring_expires_at,
-                }
+                db = get_db()
+                existing = db.execute(
+                    "SELECT status FROM call_records WHERE call_id = ?",
+                    (call_id,),
+                ).fetchone()
+                db.close()
+                target_online = target_id in connections
 
-            if target_id and target_id in connections:
-                await connections[target_id].send_json({
-                    **message,
-                    "from_id": user_id,
-                })
+                if existing is not None or user_id in active_call_users or (
+                    target_online and target_id in active_call_users
+                ):
+                    await websocket.send_json({
+                        "type": "call_reject",
+                        "call_id": call_id,
+                        "target_id": user_id,
+                        "reason": "duplicate_or_busy",
+                    })
+                    continue
 
-            if message_type == "call" and call_id:
+                ring_expires_at = message.get("ring_expires_at")
+                if not ring_expires_at:
+                    ring_expires_at = int(time.time() * 1000) + 90000
+
+                created_at = int(time.time() * 1000)
+                status = "ringing" if target_online else "missed"
+                db = get_db()
+                db.execute(
+                    """
+                    INSERT INTO call_records
+                    (call_id, caller_id, target_id, caller_name,
+                     created_at, expires_at, status)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        call_id,
+                        user_id,
+                        target_id,
+                        str(message.get("caller_name", "مستخدم CN CALL")),
+                        created_at,
+                        ring_expires_at,
+                        status,
+                    ),
+                )
+                db.commit()
+                db.close()
+
+                if target_online:
+                    active_calls[call_id] = {
+                        "call_id": call_id,
+                        "caller_id": user_id,
+                        "target_id": target_id,
+                        "status": "ringing",
+                        "created_at": created_at,
+                        "ring_expires_at": ring_expires_at,
+                        "negotiation_expires_at": None,
+                        "connection_expires_at": None,
+                        "caller_token": token,
+                        "target_token": user_access_tokens.get(target_id),
+                    }
+                    active_call_users[user_id] = call_id
+                    active_call_users[target_id] = call_id
+
                 await websocket.send_json({
                     "type": "call_started",
                     "call_id": call_id,
                     "target_id": target_id,
                     "from_id": user_id,
                     "ring_expires_at": ring_expires_at,
+                    "target_online": target_online,
                 })
 
-            if (
-                message_type == "call"
-                and target_id
-                and target_id not in connections
-            ):
-                caller_name = str(
-                    message.get("caller_name", "مستخدم CN CALL")
-                )
+                if target_online:
+                    await connections[target_id].send_json({
+                        **message,
+                        "call_id": call_id,
+                        "ring_expires_at": ring_expires_at,
+                        "from_id": user_id,
+                    })
+                continue
 
-                send_call_notification(
-                    target_id=target_id,
-                    caller_id=user_id,
-                    caller_name=caller_name,
-                    call_id=call_id,
-                )
+            record = active_calls.get(call_id)
+            if record is None:
+                await websocket.send_json({
+                    "type": "signaling_rejected",
+                    "call_id": call_id,
+                    "message_type": message_type,
+                    "reason": "unknown_or_ended_call",
+                })
+                continue
 
-            if (
-                message_type in {"call_cancelled", "call_reject"}
-                and target_id
-                and target_id not in connections
-            ):
-                send_call_notification(
-                    target_id=target_id,
-                    caller_id=user_id,
-                    caller_name=str(message.get("caller_name", "مستخدم CN CALL")),
-                    call_id=call_id,
-                    message_type="call_cancelled",
+            caller_id = str(record["caller_id"])
+            receiver_id = str(record["target_id"])
+            expected_target = receiver_id if user_id == caller_id else caller_id
+            sender_role = (
+                "caller" if user_id == caller_id else
+                "target" if user_id == receiver_id else None
+            )
+            expected_token = (
+                record["caller_token"] if sender_role == "caller" else
+                record["target_token"] if sender_role == "target" else None
+            )
+            if sender_role is None or expected_token != token:
+                await websocket.send_json({
+                    "type": "signaling_rejected",
+                    "call_id": call_id,
+                    "message_type": message_type,
+                    "reason": "sender_not_call_owner",
+                })
+                continue
+
+            if target_id != expected_target:
+                await websocket.send_json({
+                    "type": "signaling_rejected",
+                    "call_id": call_id,
+                    "message_type": message_type,
+                    "reason": "invalid_target",
+                })
+                continue
+
+            status = str(record["status"])
+            allowed = False
+            next_status = status
+            terminal = False
+            if message_type == "call_accept":
+                allowed = sender_role == "target" and status == "ringing"
+                next_status = "accepted"
+            elif message_type == "call_reject":
+                allowed = sender_role == "target" and status == "ringing"
+                next_status = "rejected"
+                terminal = True
+            elif message_type == "call_cancelled":
+                allowed = sender_role == "caller" and status == "ringing"
+                next_status = "cancelled"
+                terminal = True
+            elif message_type == "hangup":
+                allowed = status in {"ringing", "accepted", "negotiating", "connected"}
+                next_status = "ended"
+                terminal = True
+            elif message_type == "offer":
+                allowed = sender_role == "caller" and status in {
+                    "accepted", "negotiating", "connected"
+                }
+                next_status = "negotiating"
+            elif message_type == "answer":
+                allowed = sender_role == "target" and status in {
+                    "accepted", "negotiating", "connected"
+                }
+                next_status = "negotiating"
+            elif message_type == "ice_candidate":
+                allowed = status in {"accepted", "negotiating", "connected"}
+            elif message_type == "connected":
+                allowed = status in {"accepted", "negotiating"}
+                next_status = "connected"
+            elif message_type == "timeout":
+                allowed = status == "ringing"
+                next_status = "timeout"
+                terminal = True
+
+            if not allowed:
+                await websocket.send_json({
+                    "type": "signaling_rejected",
+                    "call_id": call_id,
+                    "message_type": message_type,
+                    "reason": "invalid_state_or_direction",
+                })
+                continue
+
+            record["status"] = next_status
+            if message_type == "call_accept":
+                record["negotiation_expires_at"] = (
+                    int(time.time() * 1000) + 30000
                 )
+            elif message_type == "offer":
+                record["connection_expires_at"] = (
+                    int(time.time() * 1000) + 30000
+                )
+            elif message_type == "connected":
+                record["negotiation_expires_at"] = None
+                record["connection_expires_at"] = None
+            forwarded = {
+                **message,
+                "call_id": call_id,
+                "target_id": expected_target,
+                "from_id": user_id,
+            }
+            if expected_target in connections:
+                await connections[expected_target].send_json(forwarded)
+
+            if terminal:
+                release_call(call_id, next_status)
 
     except WebSocketDisconnect:
         pass
@@ -602,4 +936,5 @@ async def websocket_endpoint(
     finally:
         if connections.get(user_id) is websocket:
             del connections[user_id]
+        release_calls_for_user(user_id, token)
 # cn-call2 railway test
