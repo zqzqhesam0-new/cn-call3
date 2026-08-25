@@ -747,9 +747,56 @@ async def websocket_endpoint(
                 db.close()
                 target_online = target_id in connections
 
-                if existing is not None or user_id in active_call_users or (
-                    target_online and target_id in active_call_users
-                ):
+                if existing is not None:
+                    await websocket.send_json({
+                        "type": "call_reject",
+                        "call_id": call_id,
+                        "target_id": user_id,
+                        "reason": "duplicate_or_busy",
+                    })
+                    continue
+
+                # Keep the normal busy protection for calls that are
+                # actually in progress. However, an offline target may
+                # have a stale FCM ringing call. Replace that stale
+                # ringing call instead of forcing the caller to wait
+                # for the 90-second ring timeout.
+                if target_id in active_call_users:
+                    previous_call_id = active_call_users.get(target_id)
+                    previous_record = (
+                        active_calls.get(previous_call_id)
+                        if previous_call_id
+                        else None
+                    )
+
+                    if (
+                        previous_record is not None
+                        and previous_record.get("status") == "ringing"
+                        and target_id not in connections
+                    ):
+                        send_call_notification(
+                            target_id=target_id,
+                            caller_id=str(previous_record["caller_id"]),
+                            caller_name=str(
+                                previous_record.get(
+                                    "caller_name",
+                                    "مستخدم CN CALL",
+                                )
+                            ),
+                            call_id=str(previous_record["call_id"]),
+                            message_type="call_cancelled",
+                        )
+                        release_call(previous_call_id, "missed")
+                    else:
+                        await websocket.send_json({
+                            "type": "call_reject",
+                            "call_id": call_id,
+                            "target_id": user_id,
+                            "reason": "duplicate_or_busy",
+                        })
+                        continue
+
+                if user_id in active_call_users:
                     await websocket.send_json({
                         "type": "call_reject",
                         "call_id": call_id,
@@ -934,6 +981,14 @@ async def websocket_endpoint(
             }
             if expected_target in connections:
                 await connections[expected_target].send_json(forwarded)
+            elif message_type == "call_cancelled":
+                send_call_notification(
+                    target_id=expected_target,
+                    caller_id=caller_id,
+                    caller_name=str(record.get("caller_name", "مستخدم CN CALL")),
+                    call_id=call_id,
+                    message_type="call_cancelled",
+                )
 
             if terminal:
                 release_call(call_id, next_status)
