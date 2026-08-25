@@ -4,9 +4,11 @@ from pydantic import BaseModel
 from pathlib import Path
 import hashlib
 import hmac
+import json
 import os
 import re
 import sqlite3
+import uuid
 
 import firebase_admin
 from firebase_admin import credentials, messaging
@@ -407,6 +409,8 @@ def send_call_notification(
     target_id: str,
     caller_id: str,
     caller_name: str,
+    call_id: str,
+    message_type: str = "incoming_call",
 ):
     token = FCM_TOKENS.get(target_id)
 
@@ -434,21 +438,15 @@ def send_call_notification(
     try:
         message = messaging.Message(
             token=token,
-            notification=messaging.Notification(
-                title="CN CALL",
-                body=f"مكالمة واردة من {caller_name}",
-            ),
             data={
-                "type": "incoming_call",
+                "type": message_type,
+                "call_id": call_id,
                 "caller_id": caller_id,
                 "caller_name": caller_name,
+                "target_id": target_id,
             },
             android=messaging.AndroidConfig(
                 priority="high",
-                notification=messaging.AndroidNotification(
-                    channel_id="cn_call_calls",
-                    sound="default",
-                ),
             ),
         )
 
@@ -494,15 +492,36 @@ async def websocket_endpoint(
                 message.get("target_id", "")
             ).strip()
 
+            message_type = str(message.get("type", "")).strip()
+            call_id = str(message.get("call_id", "")).strip()
+
+            if message_type == "call" and not call_id:
+                call_id = str(uuid.uuid4())
+
+            if call_id:
+                message = {
+                    **message,
+                    "call_id": call_id,
+                }
+
             if target_id and target_id in connections:
                 await connections[target_id].send_json({
                     **message,
                     "from_id": user_id,
                 })
 
+            if message_type == "call" and call_id:
+                await websocket.send_json({
+                    "type": "call_started",
+                    "call_id": call_id,
+                    "target_id": target_id,
+                    "from_id": user_id,
+                })
+
             if (
-                message.get("type") == "call"
+                message_type == "call"
                 and target_id
+                and target_id not in connections
             ):
                 caller_name = str(
                     message.get("caller_name", "مستخدم CN CALL")
@@ -512,6 +531,20 @@ async def websocket_endpoint(
                     target_id=target_id,
                     caller_id=user_id,
                     caller_name=caller_name,
+                    call_id=call_id,
+                )
+
+            if (
+                message_type in {"call_cancelled", "call_reject"}
+                and target_id
+                and target_id not in connections
+            ):
+                send_call_notification(
+                    target_id=target_id,
+                    caller_id=user_id,
+                    caller_name=str(message.get("caller_name", "مستخدم CN CALL")),
+                    call_id=call_id,
+                    message_type="call_cancelled",
                 )
 
     except WebSocketDisconnect:
