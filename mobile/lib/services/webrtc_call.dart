@@ -1,4 +1,8 @@
 import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+
+import 'server_config.dart';
 
 class WebRtcCall {
   RTCPeerConnection? _peer;
@@ -29,18 +33,46 @@ class WebRtcCall {
       'video': false,
     });
 
+    final iceServers = <Map<String, dynamic>>[
+      {
+        'urls': 'stun:stun.l.google.com:19302',
+      },
+      {
+        'urls': 'stun:stun1.l.google.com:19302',
+      },
+      {
+        'urls': 'stun:stun2.l.google.com:19302',
+      },
+    ];
+
+    try {
+      final response = await http.get(
+        Uri.parse('${ServerConfig.httpUrl}/turn-credentials'),
+      );
+
+      if (response.statusCode == 200) {
+        final body = jsonDecode(response.body);
+
+        if (body is Map<String, dynamic> &&
+            body['success'] == true &&
+            body['iceServers'] is List) {
+          for (final server in body['iceServers']) {
+            if (server is Map) {
+              iceServers.add(
+                Map<String, dynamic>.from(server),
+              );
+            }
+          }
+
+          print('[CN CALL][WEBRTC] TURN servers loaded');
+        }
+      }
+    } catch (e) {
+      print('[CN CALL][WEBRTC] TURN unavailable: $e');
+    }
+
     _peer = await createPeerConnection({
-      'iceServers': [
-        {
-          'urls': 'stun:stun.l.google.com:19302',
-        },
-        {
-          'urls': 'stun:stun1.l.google.com:19302',
-        },
-        {
-          'urls': 'stun:stun2.l.google.com:19302',
-        },
-      ],
+      'iceServers': iceServers,
     });
 
     for (final track in _localStream!.getTracks()) {

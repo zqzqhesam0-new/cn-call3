@@ -461,6 +461,38 @@ def send_call_notification(
 # WEBSOCKET / CALLS
 # ============================================================
 
+
+@app.get("/turn-credentials")
+async def get_turn_credentials():
+    turn_url = os.getenv("TURN_URL", "").strip()
+    turn_username = os.getenv("TURN_USERNAME", "").strip()
+    turn_password = os.getenv("TURN_PASSWORD", "").strip()
+
+    if not turn_url or not turn_username or not turn_password:
+        return {
+            "success": False,
+            "message": "TURN credentials are not configured",
+        }
+
+    base_url = turn_url
+    if not base_url.startswith("turn:"):
+        base_url = f"turn:{base_url}"
+
+    return {
+        "success": True,
+        "iceServers": [
+            {
+                "urls": [
+                    f"{base_url}?transport=udp",
+                    f"{base_url}?transport=tcp",
+                ],
+                "username": turn_username,
+                "credential": turn_password,
+            }
+        ],
+    }
+
+
 @app.websocket("/ws/{user_id}")
 async def websocket_endpoint(
     websocket: WebSocket,
