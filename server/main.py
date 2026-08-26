@@ -167,6 +167,16 @@ def init_db():
 
     db.execute(
         """
+        CREATE TABLE IF NOT EXISTS access_tokens (
+            token TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+    db.execute(
+        """
         CREATE TABLE IF NOT EXISTS call_records (
             call_id TEXT PRIMARY KEY,
             caller_id TEXT NOT NULL,
@@ -197,7 +207,20 @@ def load_fcm_tokens():
         FCM_TOKENS[row["user_id"]] = row["token"]
 
 
+def load_access_tokens():
+    db = get_db()
+    rows = db.execute(
+        "SELECT token, user_id FROM access_tokens"
+    ).fetchall()
+    db.close()
+
+    for row in rows:
+        access_tokens[row["token"]] = row["user_id"]
+        user_access_tokens[row["user_id"]] = row["token"]
+
+
 load_fcm_tokens()
+load_access_tokens()
 
 
 # ============================================================
@@ -274,6 +297,19 @@ def issue_access_token(user_id: str) -> str:
     token = uuid.uuid4().hex + uuid.uuid4().hex
     access_tokens[token] = user_id
     user_access_tokens[user_id] = token
+
+    db = get_db()
+    db.execute(
+        "DELETE FROM access_tokens WHERE user_id = ?",
+        (user_id,),
+    )
+    db.execute(
+        "INSERT INTO access_tokens (token, user_id) VALUES (?, ?)",
+        (token, user_id),
+    )
+    db.commit()
+    db.close()
+
     return token
 
 
