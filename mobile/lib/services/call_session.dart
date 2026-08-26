@@ -36,14 +36,11 @@ class CallSession {
   Future<bool> hasActiveCall() async {
     final prefs = await SharedPreferences.getInstance();
     final activeId = prefs.getString(_activeCallIdKey);
-    final activeAt = prefs.getInt(_activeCallAtKey) ?? 0;
-    if (activeId == null || activeId.isEmpty) return false;
-    if (DateTime.now().millisecondsSinceEpoch - activeAt > 90000) {
-      await prefs.remove(_activeCallIdKey);
-      await prefs.remove(_activeCallAtKey);
-      return false;
-    }
-    return true;
+
+    // لا تنتهي حالة المكالمة تلقائيًا بعد 90 ثانية.
+    // المكالمة تبقى نشطة حتى يتم استدعاء markCallEnded().
+    // هذا يمنع استقبال/بدء مكالمة ثانية أثناء وجود مكالمة فعلية.
+    return activeId != null && activeId.isNotEmpty;
   }
 
   Future<void> markCallActive(String callId) async {

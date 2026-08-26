@@ -1,10 +1,14 @@
+// ignore_for_file: avoid_print
+
 import 'dart:async';
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:uuid/uuid.dart';
 
 import 'call_session.dart';
-import 'webrtc_call.dart';
+import 'callkit_service.dart';
+import 'livekit_call.dart';
+import 'livekit_token_service.dart';
 
 enum CallState {
   incoming,
@@ -25,7 +29,7 @@ class RtcCallManager {
   static final RtcCallManager instance = RtcCallManager._();
 
   final CallSession session = CallSession.instance;
-  final WebRtcCall rtc = WebRtcCall();
+  final LiveKitCall livekit = LiveKitCall();
 
   final AudioPlayer _ringPlayer = AudioPlayer();
   bool _ringing = false;
@@ -43,7 +47,6 @@ class RtcCallManager {
   bool caller = false;
 
   final List<Map<String, dynamic>> _pendingIceCandidates = [];
-  bool _remoteDescriptionSet = false;
 
   Function()? onConnected;
   Function()? onDisconnected;
@@ -191,23 +194,7 @@ class RtcCallManager {
 
     _subscription = session.socket.messages.listen(_handleMessage);
 
-    rtc.onIceCandidate = (candidate) {
-      final target = remoteUserId;
-      final callId = currentCallId;
-      if (target == null || callId == null || callId.isEmpty) return;
-
-      session.socket.send({
-        'type': 'ice_candidate',
-        'call_id': callId,
-        'target_id': target,
-        'from_id': session.userId,
-        'candidate': candidate.candidate,
-        'sdp_mid': candidate.sdpMid,
-        'sdp_mline_index': candidate.sdpMLineIndex,
-      });
-    };
-
-    rtc.onConnected = () {
+    livekit.onConnected = () {
       final connectedCallId = currentCallId;
       final target = remoteUserId;
 
@@ -215,10 +202,17 @@ class RtcCallManager {
       inCall = true;
       state = CallState.connected;
 
+      print(
+        '[CN CALL][LIVEKIT MANAGER] connected '
+        'call_id=$connectedCallId',
+      );
+
       if (connectedCallId != null &&
           connectedCallId.isNotEmpty &&
           target != null &&
-          target.isNotEmpty) {
+          target.isNotEmpty &&
+          session.loggedIn &&
+          session.socket.connected) {
         session.socket.send({
           'type': 'connected',
           'call_id': connectedCallId,
@@ -230,8 +224,13 @@ class RtcCallManager {
       onConnected?.call();
     };
 
-    rtc.onDisconnected = () {
+    livekit.onDisconnected = () {
       if (_hangingUp) return;
+
+      print(
+        '[CN CALL][LIVEKIT MANAGER] disconnected '
+        'call_id=$currentCallId',
+      );
 
       unawaited(
         _cleanupCall(
@@ -268,12 +267,22 @@ class RtcCallManager {
 
       remoteOnline = message['target_online'] == true;
       onRemoteAvailabilityChanged?.call(remoteOnline!);
-      state = remoteOnline! ? CallState.ringing : CallState.offline;
+
+      // Offline does NOT mean the call failed.
+      // The server has already created the call and sent FCM.
+      // Keep the caller ringing until the server-provided 90s expiry.
+      state = CallState.ringing;
+
       final expiresAtRaw = message['ring_expires_at'];
       _callStartExpiresAt = expiresAtRaw is int
           ? expiresAtRaw
           : int.tryParse(expiresAtRaw?.toString() ?? '');
-      _callStartCompleter?.complete(remoteOnline!);
+
+      await _startRinging(expiresAt: _callStartExpiresAt);
+
+      // call_started itself confirms that the server accepted the call.
+      // target_online only tells us whether the target has a live WebSocket.
+      _callStartCompleter?.complete(true);
       _callStartCompleter = null;
 
       return;
@@ -282,24 +291,6 @@ class RtcCallManager {
     if (type == 'call_accept') {
       if (!_isCurrentCall(messageCallId)) return;
       await _handleAccepted();
-      return;
-    }
-
-    if (type == 'offer') {
-      if (!_isCurrentCall(messageCallId)) return;
-      await _handleOffer(message);
-      return;
-    }
-
-    if (type == 'answer') {
-      if (!_isCurrentCall(messageCallId)) return;
-      await _handleAnswer(message);
-      return;
-    }
-
-    if (type == 'ice_candidate') {
-      if (!_isCurrentCall(messageCallId)) return;
-      await _handleIceCandidate(message);
       return;
     }
 
@@ -341,7 +332,6 @@ class RtcCallManager {
     remoteOnline = null;
     onRemoteAvailabilityChanged?.call(false);
     await session.markCallActive(currentCallId!);
-    _remoteDescriptionSet = false;
     _pendingIceCandidates.clear();
 
     _callStartCompleter = Completer<bool>();
@@ -353,23 +343,10 @@ class RtcCallManager {
       'from_id': myId,
     });
 
-    final targetAvailable = await _callStartCompleter!.future.timeout(
-      const Duration(seconds: 10),
-      onTimeout: () => false,
-    );
-    _callStartCompleter = null;
-
-    if (!targetAvailable) {
-      _callStartExpiresAt = null;
-      _callStartCompleter = null;
-      await hangup(sendSignal: true);
-      state = CallState.offline;
-      return false;
-    }
-
-    final expiresAt = _callStartExpiresAt;
-    _callStartExpiresAt = null;
-    await _startRinging(expiresAt: expiresAt);
+    // The server accepts the call immediately. Open the caller screen
+    // without waiting for the target WebSocket/FCM path.
+    // target_online only describes whether the target has a live socket.
+    await _startRinging();
     return true;
   }
 
@@ -390,7 +367,6 @@ class RtcCallManager {
     state = CallState.accepted;
     caller = false;
     inCall = false;
-    _remoteDescriptionSet = false;
     _pendingIceCandidates.clear();
 
     session.socket.send({
@@ -399,7 +375,17 @@ class RtcCallManager {
       'target_id': callerId,
     });
 
-    await rtc.start();
+    try {
+      await _connectLiveKit(currentCallId!);
+    } catch (e) {
+      print('[CN CALL][LIVEKIT] accept connect error: $e');
+      await _cleanupCall(
+        reason: 'failed',
+        sendSignal: true,
+        signalType: 'hangup',
+      );
+    }
+
     final activeCallId = currentCallId;
     if (activeCallId != null) {
       _startNegotiationTimeout(activeCallId);
@@ -413,118 +399,21 @@ class RtcCallManager {
 
     await _stopRinging();
 
-    final target = remoteUserId;
-    if (target == null) return;
-
-    await rtc.start();
     final acceptedCallId = currentCallId;
-    if (acceptedCallId != null) {
-      _startNegotiationTimeout(acceptedCallId);
-      _startConnectionTimeout(acceptedCallId);
-      state = CallState.connecting;
-    }
-    final offer = await rtc.createOffer();
+    if (acceptedCallId == null || acceptedCallId.isEmpty) return;
 
-    session.socket.send({
-      'type': 'offer',
-      'call_id': currentCallId,
-      'target_id': target,
-      'from_id': session.userId,
-      'sdp': offer.sdp,
-      'sdp_type': offer.type,
-    });
-  }
-
-  Future<void> _handleOffer(Map<String, dynamic> message) async {
-    final fromId = message['from_id']?.toString();
-    final sdp = message['sdp']?.toString();
-    final type = message['sdp_type']?.toString();
-
-    if (fromId == null || sdp == null || type == null) return;
-
-    remoteUserId = fromId;
     state = CallState.connecting;
 
-    if (!rtc.active) {
-      await rtc.start();
-    }
-
-    await rtc.setRemoteDescription(sdp, type);
-
-    _remoteDescriptionSet = true;
-
-    await _flushPendingIceCandidates();
-
-    final answer = await rtc.createAnswer();
-
-    session.socket.send({
-      'type': 'answer',
-      'call_id': currentCallId,
-      'target_id': fromId,
-      'from_id': session.userId,
-      'sdp': answer.sdp,
-      'sdp_type': answer.type,
-    });
-  }
-
-  Future<void> _handleAnswer(Map<String, dynamic> message) async {
-    final sdp = message['sdp']?.toString();
-    final type = message['sdp_type']?.toString();
-
-    if (sdp == null || type == null) return;
-
-    await rtc.setRemoteDescription(sdp, type);
-
-    _remoteDescriptionSet = true;
-
-    await _flushPendingIceCandidates();
-  }
-
-  Future<void> _handleIceCandidate(
-    Map<String, dynamic> message,
-  ) async {
-    final candidate = message['candidate']?.toString();
-
-    if (candidate == null || candidate.isEmpty) return;
-
-    if (!_remoteDescriptionSet) {
-      _pendingIceCandidates.add(message);
-      return;
-    }
-
-    await rtc.addCandidate(
-      candidate: candidate,
-      sdpMid: message['sdp_mid']?.toString(),
-      sdpMLineIndex: _toInt(message['sdp_mline_index']),
-    );
-  }
-
-  Future<void> _flushPendingIceCandidates() async {
-    if (!_remoteDescriptionSet) return;
-
-    final pending = List<Map<String, dynamic>>.from(
-      _pendingIceCandidates,
-    );
-
-    _pendingIceCandidates.clear();
-
-    for (final message in pending) {
-      final candidate = message['candidate']?.toString();
-
-      if (candidate == null || candidate.isEmpty) continue;
-
-      await rtc.addCandidate(
-        candidate: candidate,
-        sdpMid: message['sdp_mid']?.toString(),
-        sdpMLineIndex: _toInt(message['sdp_mline_index']),
+    try {
+      await _connectLiveKit(acceptedCallId);
+    } catch (e) {
+      print('[CN CALL][LIVEKIT] caller connect error: $e');
+      await _cleanupCall(
+        reason: 'failed',
+        sendSignal: true,
+        signalType: 'hangup',
       );
     }
-  }
-
-  int? _toInt(dynamic value) {
-    if (value == null) return null;
-    if (value is int) return value;
-    return int.tryParse(value.toString());
   }
 
   Future<void> rejectCall({
@@ -587,14 +476,18 @@ class RtcCallManager {
         });
       }
 
-      await rtc.close();
+      await livekit.disconnect();
+
+      if (callId != null && callId.isNotEmpty) {
+        await CallKitService.instance.forceEndCall(callId);
+      }
+
       await session.markCallEnded(callId);
       await session.clearPendingIncomingCall(callId);
       await session.clearPendingCallKitAction(callId);
 
       _pendingIceCandidates.clear();
-      _remoteDescriptionSet = false;
-      remoteUserId = null;
+        remoteUserId = null;
       currentCallId = null;
       remoteOnline = null;
       inCall = false;
@@ -614,7 +507,11 @@ class RtcCallManager {
   }
 
   Future<void> mute(bool value) {
-    return rtc.mute(value);
+    return livekit.mute(value);
+  }
+
+  Future<void> setSpeaker(bool value) {
+    return livekit.setSpeaker(value);
   }
 
   Future<void> dispose() async {
@@ -623,7 +520,35 @@ class RtcCallManager {
     _subscription = null;
     _started = false;
 
-    await rtc.dispose();
+    await livekit.disconnect();
     await _ringPlayer.dispose();
   }
+
+  Future<void> _connectLiveKit(String callId) async {
+    print(
+      '[CN CALL][LIVEKIT MANAGER] requesting token '
+      'call_id=$callId',
+    );
+
+    final data = await LiveKitTokenService.getToken(
+      callId: callId,
+    );
+
+    final url = data['url']?.toString();
+    final token = data['token']?.toString();
+
+    if (url == null || url.isEmpty) {
+      throw Exception('LiveKit response missing url');
+    }
+
+    if (token == null || token.isEmpty) {
+      throw Exception('LiveKit response missing token');
+    }
+
+    await livekit.connect(
+      url: url,
+      token: token,
+    );
+  }
+
 }

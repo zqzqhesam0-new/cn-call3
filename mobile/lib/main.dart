@@ -2,7 +2,6 @@ import 'package:flutter/foundation.dart';
 
 import 'dart:async';
 
-import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -15,7 +14,6 @@ import 'services/account_api.dart';
 import 'services/rtc_call_manager.dart';
 import 'services/callkit_service.dart';
 
-import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 Future<void> main() async {
@@ -195,6 +193,8 @@ class _LoginScreenState extends State<LoginScreen> {
     );
 
     await FirebaseMessagingService.instance.refreshTokenForCurrentUser();
+
+    if (!mounted) return;
 
     Navigator.pushReplacement(
       context,
@@ -1551,7 +1551,7 @@ class _CallScreenState extends State<CallScreen> {
   Future<void> toggleSpeaker() async {
     final value = !speaker;
 
-    await RtcCallManager.instance.rtc.setSpeaker(value);
+    await RtcCallManager.instance.setSpeaker(value);
 
     if (!mounted) return;
 
@@ -1594,23 +1594,6 @@ class _CallScreenState extends State<CallScreen> {
         body: SafeArea(
           child: Stack(
             children: [
-              Positioned(
-                left: 0,
-                top: 0,
-                width: 1,
-                height: 1,
-                child: IgnorePointer(
-                  child: Opacity(
-                    opacity: 0.01,
-                    child: RTCVideoView(
-                      RtcCallManager.instance.rtc.remoteRenderer,
-                      objectFit:
-                          RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
-                    ),
-                  ),
-                ),
-              ),
-
               Column(
                 children: [
                   const SizedBox(height: 24),
@@ -1705,8 +1688,6 @@ class _CallScreenState extends State<CallScreen> {
                     child: Text(
                       connected
                           ? 'متصل حاليًا'
-                          : remoteOnline == false
-                          ? 'غير متصل'
                           : 'يتم الاستقبال',
                       key: ValueKey('$connected-$remoteOnline'),
                       style: TextStyle(

@@ -14,6 +14,7 @@ import uuid
 
 import firebase_admin
 from firebase_admin import credentials, messaging
+from livekit import api
 
 
 app = FastAPI(title="CN CALL Server")
@@ -707,6 +708,51 @@ async def get_turn_credentials(
                 "credential": turn_password,
             }
         ],
+    }
+
+
+@app.get("/livekit/token")
+def livekit_token(
+    user_id: str,
+    call_id: str,
+    authorization: str = Header(None),
+):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="missing token")
+
+    token = authorization.replace("Bearer ", "", 1).strip()
+
+    if access_tokens.get(token) != user_id:
+        raise HTTPException(status_code=401, detail="invalid session")
+
+    livekit_url = os.getenv("LIVEKIT_URL")
+    livekit_key = os.getenv("LIVEKIT_API_KEY")
+    livekit_secret = os.getenv("LIVEKIT_API_SECRET")
+
+    if not livekit_url or not livekit_key or not livekit_secret:
+        raise HTTPException(status_code=500, detail="livekit not configured")
+
+    room_name = f"call-{call_id}"
+
+    jwt = (
+        api.AccessToken(
+            livekit_key,
+            livekit_secret,
+        )
+        .with_identity(user_id)
+        .with_grants(
+            api.VideoGrants(
+                room_join=True,
+                room=room_name,
+            )
+        )
+    )
+
+    return {
+        "success": True,
+        "url": livekit_url,
+        "token": jwt.to_jwt(),
+        "room": room_name,
     }
 
 
