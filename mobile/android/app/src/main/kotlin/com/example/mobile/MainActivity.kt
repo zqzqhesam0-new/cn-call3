@@ -2,6 +2,7 @@ package com.example.mobile
 
 import android.os.Bundle
 import android.content.Intent
+import org.json.JSONArray
 import org.json.JSONObject
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -42,6 +43,12 @@ class MainActivity : FlutterActivity() {
             else -> "incoming"
         }
 
+        if (action == "ended") {
+            markCallEnded(callId)
+            return
+        }
+        if (isCallEnded(callId)) return
+
         val stateJson = JSONObject().apply {
             put("call_id", callId)
             put("caller_id", callerId)
@@ -60,6 +67,54 @@ class MainActivity : FlutterActivity() {
             .putString("flutter.cn_call_pending_callkit_caller_id", callerId)
             .putString("flutter.pending_incoming_call", stateJson.toString())
             .apply()
+    }
+
+    private fun markCallEnded(callId: String) {
+        val prefs = getSharedPreferences("FlutterSharedPreferences", MODE_PRIVATE)
+        val endedIds = endedCallIds(prefs).toMutableList()
+        endedIds.remove(callId)
+        endedIds.add(callId)
+        if (endedIds.size > 32) {
+            endedIds.subList(0, endedIds.size - 32).clear()
+        }
+
+        val editor = prefs.edit().putString(
+            "flutter.cn_call_ended_call_ids_v2",
+            JSONArray(endedIds).toString()
+        )
+        val pending = prefs.getString("flutter.pending_incoming_call", null)
+        val pendingId = try {
+            JSONObject(pending ?: "{}").optString("call_id")
+        } catch (_: Exception) {
+            ""
+        }
+        if (pendingId == callId) {
+            editor.remove("flutter.pending_incoming_call")
+        }
+        if (prefs.getString("flutter.cn_call_pending_callkit_call_id", null) == callId) {
+            editor.remove("flutter.cn_call_pending_callkit_action")
+                .remove("flutter.cn_call_pending_callkit_caller_id")
+                .remove("flutter.cn_call_pending_callkit_call_id")
+                .remove("flutter.cn_call_pending_callkit_target_id")
+        }
+        editor.apply()
+    }
+
+    private fun isCallEnded(callId: String): Boolean {
+        return endedCallIds(
+            getSharedPreferences("FlutterSharedPreferences", MODE_PRIVATE)
+        ).contains(callId)
+    }
+
+    private fun endedCallIds(prefs: android.content.SharedPreferences): List<String> {
+        val encoded = prefs.getString("flutter.cn_call_ended_call_ids_v2", "[]")
+        return try {
+            val values = JSONArray(encoded ?: "[]")
+            List(values.length()) { index -> values.optString(index).trim() }
+                .filter { it.isNotEmpty() }
+        } catch (_: Exception) {
+            emptyList()
+        }
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {

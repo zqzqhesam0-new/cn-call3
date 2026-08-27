@@ -13,6 +13,7 @@ class CallSocket {
   bool _connecting = false;
   bool _reconnectEnabled = true;
   int _reconnectAttempt = 0;
+  int _connectionGeneration = 0;
   Future<void> Function()? onSessionInvalid;
 
   bool get connected => _channel != null;
@@ -23,13 +24,13 @@ class CallSocket {
   Stream<Map<String, dynamic>> get messages => _messages.stream;
 
   Future<void> connect(String userId, String token) async {
-    if (_channel != null) return;
+    if (_channel != null || _connecting) return;
     _userId = userId;
     _token = token;
     _reconnectEnabled = true;
-    if (_channel != null || _connecting) return;
 
     _connecting = true;
+    final generation = ++_connectionGeneration;
 
     final channel = WebSocketChannel.connect(
       Uri.parse('${ServerConfig.websocketUrl(userId)}?token=$token'),
@@ -37,6 +38,16 @@ class CallSocket {
 
     try {
       await channel.ready;
+
+      // logout/reconnect may have superseded this asynchronous connection
+      // attempt while it was waiting for `ready`.
+      if (generation != _connectionGeneration ||
+          !_reconnectEnabled ||
+          _userId != userId ||
+          _token != token) {
+        await channel.sink.close();
+        return;
+      }
 
       _channel = channel;
       _connecting = false;
@@ -74,16 +85,16 @@ class CallSocket {
 
           if (identical(_channel, channel)) {
             _channel = null;
+            if (_reconnectEnabled) _scheduleReconnect();
           }
-          if (_reconnectEnabled) _scheduleReconnect();
         },
         onError: (error, stackTrace) {
           print('SOCKET ERROR: $error');
 
           if (identical(_channel, channel)) {
             _channel = null;
+            if (_reconnectEnabled) _scheduleReconnect();
           }
-          if (_reconnectEnabled) _scheduleReconnect();
         },
         cancelOnError: false,
       );
@@ -96,8 +107,10 @@ class CallSocket {
         _channel = null;
       }
 
-      _connecting = false;
-      if (_reconnectEnabled) _scheduleReconnect();
+      if (generation == _connectionGeneration) {
+        _connecting = false;
+        if (_reconnectEnabled) _scheduleReconnect();
+      }
 
       rethrow;
     }
@@ -107,7 +120,7 @@ class CallSocket {
     final userId = _userId;
     final token = _token;
     if (!_reconnectEnabled ||
-      userId == null ||
+        userId == null ||
         userId.isEmpty ||
         token == null ||
         token.isEmpty ||
@@ -134,9 +147,7 @@ class CallSocket {
   void send(Map<String, dynamic> data) {
     final channel = _channel;
 
-    print(
-      'SOCKET SEND: type=${data['type']} call_id=${data['call_id']}',
-    );
+    print('SOCKET SEND: type=${data['type']} call_id=${data['call_id']}');
 
     if (channel == null) {
       print('SOCKET NOT CONNECTED');
@@ -147,6 +158,8 @@ class CallSocket {
   }
 
   void disconnect() {
+    _connectionGeneration++;
+    _connecting = false;
     _reconnectEnabled = false;
     _userId = null;
     _token = null;
@@ -157,6 +170,8 @@ class CallSocket {
   }
 
   Future<void> dispose() async {
+    _connectionGeneration++;
+    _connecting = false;
     _reconnectEnabled = false;
     await _messages.close();
 
@@ -168,6 +183,7 @@ class CallSocket {
   }
 
   void _handleSessionInvalid() {
+    _connectionGeneration++;
     _reconnectEnabled = false;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;

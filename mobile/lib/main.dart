@@ -343,9 +343,15 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _loadingData = true;
 
   bool _incomingCallScreenOpen = false;
+  String? _incomingCallScreenCallId;
 
   void _closeIncomingCallScreen() {
-    if (!mounted || !_incomingCallScreenOpen) return;
+    if (!_incomingCallScreenOpen) return;
+
+    if (!mounted) {
+      _incomingCallScreenOpen = false;
+      return;
+    }
 
     final navigator = Navigator.of(context);
 
@@ -354,6 +360,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     _incomingCallScreenOpen = false;
+    _incomingCallScreenCallId = null;
   }
 
   @override
@@ -393,6 +400,9 @@ class _HomeScreenState extends State<HomeScreen> {
     CallKitService.instance.onAccepted = (callerId) {
       if (!mounted) return;
 
+      _incomingCallScreenOpen = false;
+      _incomingCallScreenCallId = null;
+
       Navigator.push(
         context,
         MaterialPageRoute(
@@ -404,8 +414,13 @@ class _HomeScreenState extends State<HomeScreen> {
       );
     };
 
-    void showIncomingCall(Map<String, dynamic> call) {
+    Future<void> showIncomingCall(Map<String, dynamic> call) async {
       if (!mounted) return;
+
+      final callId = call['call_id']?.toString().trim() ?? '';
+      if (callId.isEmpty || await CallSession.instance.isCallEnded(callId)) {
+        return;
+      }
 
       final callerId =
           call['caller_id']?.toString() ?? call['from_id']?.toString() ?? '';
@@ -418,6 +433,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _addHistory(name: callerName, id: callerId, incoming: true);
 
       _incomingCallScreenOpen = true;
+      _incomingCallScreenCallId = callId;
 
       if (kIsWeb) {
         Navigator.push(
@@ -426,26 +442,23 @@ class _HomeScreenState extends State<HomeScreen> {
             builder: (_) => IncomingCallScreen(
               name: callerName,
               id: callerId,
-              callId: call['call_id']?.toString() ?? '',
+              callId: callId,
             ),
           ),
         ).whenComplete(() {
           if (mounted) {
             _incomingCallScreenOpen = false;
+            _incomingCallScreenCallId = null;
           }
         });
       } else {
         CallKitService.instance
             .showIncomingCall(
-              callId: call['call_id']?.toString() ?? '',
+              callId: callId,
               callerId: callerId,
               callerName: callerName,
             )
-            .whenComplete(() {
-              if (mounted) {
-                _incomingCallScreenOpen = false;
-              }
-            });
+            ;
       }
     }
 
@@ -453,15 +466,7 @@ class _HomeScreenState extends State<HomeScreen> {
     rtcManager.onIncomingCall = showIncomingCall;
 
     rtcManager.onRemoteCallCancelled = (callId) async {
-      await CallKitService.instance.forceEndCall(callId);
-
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.remove('pending_incoming_call');
-      await prefs.remove('cn_call_pending_callkit_action');
-      await prefs.remove('cn_call_pending_callkit_caller_id');
-      await prefs.remove('cn_call_pending_callkit_call_id');
-      await prefs.remove('cn_call_pending_callkit_target_id');
-
+      if (_incomingCallScreenCallId != callId) return;
       _closeIncomingCallScreen();
     };
 
@@ -472,11 +477,15 @@ class _HomeScreenState extends State<HomeScreen> {
       final pendingCall =
           await CallSession.instance.takePendingIncomingCall();
       if (mounted && pendingCall != null) {
-        showIncomingCall(pendingCall);
+        await showIncomingCall(pendingCall);
       }
     });
 
     rtcManager.onDisconnected = () {
+      _closeIncomingCallScreen();
+    };
+
+    CallKitService.instance.onRejected = (_) {
       _closeIncomingCallScreen();
     };
   }

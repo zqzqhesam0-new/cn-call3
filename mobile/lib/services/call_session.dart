@@ -29,7 +29,9 @@ class CallSession {
 
   bool get loggedIn => userId != null;
 
-  static const _endedCallIdsKey = 'cn_call_ended_call_ids';
+  // This is a JSON string rather than a StringList. Android native code must
+  // read the exact same representation from FlutterSharedPreferences.
+  static const _endedCallIdsKey = 'cn_call_ended_call_ids_v2';
   static const _activeCallIdKey = 'cn_call_active_call_id';
   static const _activeCallAtKey = 'cn_call_active_call_at';
 
@@ -46,10 +48,7 @@ class CallSession {
   Future<void> markCallActive(String callId) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_activeCallIdKey, callId);
-    await prefs.setInt(
-      _activeCallAtKey,
-      DateTime.now().millisecondsSinceEpoch,
-    );
+    await prefs.setInt(_activeCallAtKey, DateTime.now().millisecondsSinceEpoch);
   }
 
   Future<bool> isCallEnded(String? callId) async {
@@ -57,7 +56,7 @@ class CallSession {
     if (id.isEmpty) return true;
 
     final prefs = await SharedPreferences.getInstance();
-    return (prefs.getStringList(_endedCallIdsKey) ?? <String>[]).contains(id);
+    return _readEndedCallIds(prefs).contains(id);
   }
 
   Future<void> markCallEnded(String? callId) async {
@@ -65,15 +64,32 @@ class CallSession {
     if (id.isEmpty) return;
 
     final prefs = await SharedPreferences.getInstance();
-    final ids = prefs.getStringList(_endedCallIdsKey) ?? <String>[];
+    final ids = _readEndedCallIds(prefs);
     ids.remove(id);
     ids.add(id);
     if (ids.length > 32) ids.removeRange(0, ids.length - 32);
-    await prefs.setStringList(_endedCallIdsKey, ids);
+    await prefs.setString(_endedCallIdsKey, jsonEncode(ids));
     if (prefs.getString(_activeCallIdKey) == id) {
       await prefs.remove(_activeCallIdKey);
       await prefs.remove(_activeCallAtKey);
     }
+  }
+
+  List<String> _readEndedCallIds(SharedPreferences prefs) {
+    final encoded = prefs.getString(_endedCallIdsKey);
+    if (encoded == null || encoded.isEmpty) return <String>[];
+    try {
+      final decoded = jsonDecode(encoded);
+      if (decoded is List) {
+        return decoded
+            .map((value) => value.toString().trim())
+            .where((value) => value.isNotEmpty)
+            .toList();
+      }
+    } catch (_) {
+      // A malformed tombstone must never crash an incoming-call handler.
+    }
+    return <String>[];
   }
 
   Future<void> login({
@@ -118,11 +134,11 @@ class CallSession {
     final token = prefs.getString('cn_call_access_token');
 
     if (id == null ||
-      id.isEmpty ||
-      name == null ||
-      name.isEmpty ||
-      token == null ||
-      token.isEmpty) {
+        id.isEmpty ||
+        name == null ||
+        name.isEmpty ||
+        token == null ||
+        token.isEmpty) {
       return false;
     }
 
@@ -151,6 +167,13 @@ class CallSession {
 
       await prefs.setString('pending_incoming_call', jsonEncode(data));
 
+      // FCM data messages can be delivered after a cancellation message.  Do
+      // not re-publish a call that was cancelled while this write was pending.
+      if (await isCallEnded(callId)) {
+        await clearPendingIncomingCall(callId);
+        return;
+      }
+
       _incomingCalls.add(data);
     } catch (e) {
       print('SAVE INCOMING CALL ERROR: $e');
@@ -162,18 +185,24 @@ class CallSession {
       final prefs = await SharedPreferences.getInstance();
 
       final action = prefs.getString('cn_call_pending_callkit_action');
-      final callerId =
-          prefs.getString('cn_call_pending_callkit_caller_id');
-        final callId =
-          prefs.getString('cn_call_pending_callkit_call_id');
+      final callerId = prefs.getString('cn_call_pending_callkit_caller_id');
+      final callId = prefs.getString('cn_call_pending_callkit_call_id');
 
       if (action == null ||
           action.isEmpty ||
-          callerId == null ||
-          callerId.isEmpty ||
           callId == null ||
-          callId.isEmpty ||
-          await isCallEnded(callId)) {
+          callId.isEmpty) {
+        return;
+      }
+
+      if (await isCallEnded(callId)) {
+        await clearPendingCallKitAction(callId);
+        await clearPendingIncomingCall(callId);
+        return;
+      }
+
+      if (callerId == null || callerId.isEmpty) {
+        await clearPendingCallKitAction(callId);
         return;
       }
 
@@ -188,6 +217,9 @@ class CallSession {
           callId: callId,
         );
       } else {
+        // `incoming` is written by the native activity solely to accompany
+        // pending_incoming_call. It must not survive as a fake CallKit action.
+        await clearPendingCallKitAction(callId);
         return;
       }
 

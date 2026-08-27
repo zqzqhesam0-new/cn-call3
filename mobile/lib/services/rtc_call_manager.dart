@@ -80,10 +80,7 @@ class RtcCallManager {
       duration = Duration(milliseconds: cappedMs);
     }
 
-    _ringTimeoutTimer = Timer(
-      duration,
-      _handleRingTimeout,
-    );
+    _ringTimeoutTimer = Timer(duration, _handleRingTimeout);
 
     try {
       if (!wasRinging) {
@@ -91,9 +88,8 @@ class RtcCallManager {
         await _ringPlayer.setReleaseMode(ReleaseMode.loop);
         await _ringPlayer.play(
           AssetSource('sounds/ringing.mp3'),
-          ctx: AudioContextConfig(
-            route: AudioContextConfigRoute.earpiece,
-          ).build(),
+          ctx: AudioContextConfig(route: AudioContextConfigRoute.earpiece)
+              .build(),
         );
         print('[CN CALL][RING] started');
       }
@@ -198,6 +194,10 @@ class RtcCallManager {
       final connectedCallId = currentCallId;
       final target = remoteUserId;
 
+      if (_hangingUp || connectedCallId == null || connectedCallId.isEmpty) {
+        return;
+      }
+
       _cancelCallTimeouts();
       inCall = true;
       state = CallState.connected;
@@ -207,8 +207,7 @@ class RtcCallManager {
         'call_id=$connectedCallId',
       );
 
-      if (connectedCallId != null &&
-          connectedCallId.isNotEmpty &&
+      if (connectedCallId.isNotEmpty &&
           target != null &&
           target.isNotEmpty &&
           session.loggedIn &&
@@ -233,11 +232,7 @@ class RtcCallManager {
       );
 
       unawaited(
-        _cleanupCall(
-          reason: 'failed',
-          sendSignal: true,
-          signalType: 'hangup',
-        ),
+        _cleanupCall(reason: 'failed', sendSignal: true, signalType: 'hangup'),
       );
     };
   }
@@ -295,30 +290,49 @@ class RtcCallManager {
     }
 
     if (type == 'call_cancelled') {
-      if (!_isCurrentCall(messageCallId)) return;
-      final cancelledCallId = messageCallId!;
-
-      onRemoteCallCancelled?.call(cancelledCallId);
-      await _cleanupCall(reason: 'cancelled');
+      await handleRemoteTermination(callId: messageCallId, reason: 'cancelled');
       return;
     }
 
     if (type == 'hangup' || type == 'call_reject') {
-      if (!_isCurrentCall(messageCallId)) return;
-      await _cleanupCall(
+      await handleRemoteTermination(
+        callId: messageCallId,
         reason: type == 'call_reject' ? 'rejected' : 'ended',
       );
       return;
     }
   }
 
+  /// Handles a terminal event from WebSocket or FCM exactly once at the call
+  /// state boundary.  Persisting the tombstone before touching native UI makes
+  /// late `incoming_call` pushes, reconnects and pending-call restoration
+  /// harmless.
+  Future<void> handleRemoteTermination({
+    required String? callId,
+    required String reason,
+  }) async {
+    final id = callId?.trim() ?? '';
+    if (id.isEmpty) return;
+
+    await session.markCallEnded(id);
+    await session.clearPendingIncomingCall(id);
+    await session.clearPendingCallKitAction(id);
+    await CallKitService.instance.forceEndCall(id);
+
+    if (reason == 'cancelled') {
+      onRemoteCallCancelled?.call(id);
+    }
+
+    if (!_isCurrentCall(id)) return;
+
+    await _cleanupCall(reason: reason);
+  }
+
   bool _isCurrentCall(String? callId) {
     return callId != null && callId.isNotEmpty && callId == currentCallId;
   }
 
-  Future<bool> startCall({
-    required String targetId,
-  }) async {
+  Future<bool> startCall({required String targetId}) async {
     final myId = session.userId;
     if (myId == null || targetId == myId) return false;
 
@@ -350,10 +364,7 @@ class RtcCallManager {
     return true;
   }
 
-  Future<void> acceptCall({
-    required String callerId,
-    String? callId,
-  }) async {
+  Future<void> acceptCall({required String callerId, String? callId}) async {
     final acceptedCallId = callId ?? currentCallId;
     if (acceptedCallId == null ||
         await session.isCallEnded(acceptedCallId) ||
@@ -416,10 +427,27 @@ class RtcCallManager {
     }
   }
 
-  Future<void> rejectCall({
-    required String callerId,
-    String? callId,
-  }) async {
+  Future<void> rejectCall({required String callerId, String? callId}) async {
+    final rejectedCallId = callId?.trim() ?? '';
+    final rejectedCallerId = callerId.trim();
+    if (rejectedCallId.isEmpty ||
+        rejectedCallerId.isEmpty ||
+        await session.isCallEnded(rejectedCallId)) {
+      return;
+    }
+    if (currentCallId != null && currentCallId != rejectedCallId) return;
+    if (remoteUserId != null && remoteUserId != rejectedCallerId) return;
+
+    // A CallKit action can launch Flutter after the process was terminated.
+    // Rehydrate only this exact call so cleanup sends its reject to the right
+    // peer; a stale action can never clean up a newer call.
+    currentCallId ??= rejectedCallId;
+    remoteUserId ??= rejectedCallerId;
+    caller = false;
+    inCall = false;
+    state = CallState.incoming;
+    await session.markCallActive(rejectedCallId);
+
     await _cleanupCall(
       reason: 'rejected',
       sendSignal: true,
@@ -427,9 +455,7 @@ class RtcCallManager {
     );
   }
 
-  Future<void> hangup({
-    bool sendSignal = true,
-  }) async {
+  Future<void> hangup({bool sendSignal = true}) async {
     final shouldCancel = caller && !inCall;
     await _cleanupCall(
       reason: shouldCancel ? 'cancelled' : 'ended',
@@ -487,7 +513,7 @@ class RtcCallManager {
       await session.clearPendingCallKitAction(callId);
 
       _pendingIceCandidates.clear();
-        remoteUserId = null;
+      remoteUserId = null;
       currentCallId = null;
       remoteOnline = null;
       inCall = false;
@@ -530,9 +556,7 @@ class RtcCallManager {
       'call_id=$callId',
     );
 
-    final data = await LiveKitTokenService.getToken(
-      callId: callId,
-    );
+    final data = await LiveKitTokenService.getToken(callId: callId);
 
     final url = data['url']?.toString();
     final token = data['token']?.toString();
@@ -545,10 +569,6 @@ class RtcCallManager {
       throw Exception('LiveKit response missing token');
     }
 
-    await livekit.connect(
-      url: url,
-      token: token,
-    );
+    await livekit.connect(url: url, token: token);
   }
-
 }

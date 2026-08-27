@@ -11,10 +11,10 @@ Future<void> callKitBackgroundHandler(CallEvent event) async {
   final params = switch (event) {
     CallEventActionCallAccept(:final callKitParams) => callKitParams,
     CallEventActionCallDecline(:final callKitParams) => callKitParams,
-    CallEventActionCallEnded(:final callKitParams) => callKitParams,
     _ => null,
   };
   if (params == null) return;
+  if (await RtcCallManager.instance.session.isCallEnded(params.id)) return;
   final extra = params.extra;
   final callerId =
       extra?['callerId']?.toString() ?? params.handle?.toString() ?? '';
@@ -33,8 +33,10 @@ Future<void> callKitBackgroundHandler(CallEvent event) async {
   await prefs.setString('cn_call_pending_callkit_action', action);
   await prefs.setString('cn_call_pending_callkit_caller_id', callerId);
   await prefs.setString('cn_call_pending_callkit_call_id', params.id);
-  await prefs.setString('cn_call_pending_callkit_target_id',
-      extra?['targetId']?.toString() ?? '');
+  await prefs.setString(
+    'cn_call_pending_callkit_target_id',
+    extra?['targetId']?.toString() ?? '',
+  );
 }
 
 class CallKitService {
@@ -56,9 +58,7 @@ class CallKitService {
     if (_initialized) return;
     _initialized = true;
 
-    await FlutterCallkitIncoming.onBackgroundMessage(
-      callKitBackgroundHandler,
-    );
+    await FlutterCallkitIncoming.onBackgroundMessage(callKitBackgroundHandler);
     _eventSubscription = FlutterCallkitIncoming.onEvent.listen(_handleEvent);
   }
 
@@ -68,6 +68,7 @@ class CallKitService {
     required String callerName,
     String? targetId,
   }) async {
+    if (await RtcCallManager.instance.session.isCallEnded(callId)) return;
     final params = CallKitParams(
       id: callId,
       nameCaller: callerName,
@@ -75,9 +76,7 @@ class CallKitService {
       handle: callerId,
       type: 0,
       duration: 90000,
-      callingNotification: const NotificationParams(
-        showNotification: false,
-      ),
+      callingNotification: const NotificationParams(showNotification: false),
       extra: <String, dynamic>{
         'callerId': callerId,
         'callerName': callerName,
@@ -103,6 +102,13 @@ class CallKitService {
     );
 
     await FlutterCallkitIncoming.showCallkitIncoming(params);
+
+    // The cancellation can win while the platform method is awaiting. End the
+    // native UI again after it returns so a late incoming operation cannot
+    // resurrect a terminal call.
+    if (await RtcCallManager.instance.session.isCallEnded(callId)) {
+      await forceEndCall(callId);
+    }
   }
 
   Future<void> endCall(String callId) async {
@@ -173,7 +179,9 @@ class CallKitService {
     }
 
     if (event is CallEventActionCallEnded) {
-      await _reject(event.callKitParams);
+      // `endCall`/`hideCallkitIncoming` emits this event too.  It is not a
+      // user decline, so never recreate a pending reject after a remote
+      // cancellation has cleared the call state.
       return;
     }
 
@@ -195,19 +203,14 @@ class CallKitService {
         extra?['callerId']?.toString() ?? params.handle?.toString();
 
     if (callerId == null || callerId.isEmpty) return;
+    if (await RtcCallManager.instance.session.isCallEnded(params.id)) return;
 
     final prefs = await SharedPreferences.getInstance();
 
     // Always persist the action first. This is required when Android
     // launches the Flutter process after the app was terminated.
-    await prefs.setString(
-      'cn_call_pending_callkit_action',
-      'accept',
-    );
-    await prefs.setString(
-      'cn_call_pending_callkit_caller_id',
-      callerId,
-    );
+    await prefs.setString('cn_call_pending_callkit_action', 'accept');
+    await prefs.setString('cn_call_pending_callkit_caller_id', callerId);
     await prefs.setString('cn_call_pending_callkit_call_id', params.id);
 
     // If Flutter is already running and the user is logged in,
@@ -226,8 +229,9 @@ class CallKitService {
       lastAcceptedCallId = params.id;
       onAccepted?.call(callerId);
 
-      await prefs.remove('cn_call_pending_callkit_action');
-      await prefs.remove('cn_call_pending_callkit_caller_id');
+      await RtcCallManager.instance.session.clearPendingCallKitAction(
+        params.id,
+      );
     } catch (e) {
       print('CALLKIT ACCEPT ERROR: $e');
 
@@ -243,6 +247,7 @@ class CallKitService {
         extra?['callerId']?.toString() ?? params.handle?.toString();
 
     if (callerId == null || callerId.isEmpty) return;
+    if (await RtcCallManager.instance.session.isCallEnded(params.id)) return;
 
     final prefs = await SharedPreferences.getInstance();
 
@@ -259,8 +264,9 @@ class CallKitService {
 
       onRejected?.call(callerId);
 
-      await prefs.remove('cn_call_pending_callkit_action');
-      await prefs.remove('cn_call_pending_callkit_caller_id');
+      await RtcCallManager.instance.session.clearPendingCallKitAction(
+        params.id,
+      );
     }
   }
 

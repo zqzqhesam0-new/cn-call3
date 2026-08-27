@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 
 import 'call_session.dart';
 import 'callkit_service.dart';
+import 'rtc_call_manager.dart';
 import 'server_config.dart';
 
 @pragma('vm:entry-point')
@@ -27,7 +28,6 @@ Future<void> firebaseMessagingBackgroundHandler(
         await CallSession.instance.hasActiveCall()) {
       return;
     }
-    await CallSession.instance.markCallActive(callId);
 
     final callerId =
         message.data['caller_id']?.toString() ??
@@ -38,6 +38,8 @@ Future<void> firebaseMessagingBackgroundHandler(
       print('FCM BACKGROUND: missing caller_id');
       return;
     }
+
+    await CallSession.instance.markCallActive(callId);
 
     await CallSession.instance.incomingCallFromNotification(message.data);
 
@@ -62,12 +64,10 @@ Future<void> firebaseMessagingBackgroundHandler(
 
   if (type == 'call_cancelled') {
     final callId = message.data['call_id']?.toString();
-
-    await CallSession.instance.markCallEnded(callId);
-    await CallKitService.instance.forceEndCall(callId);
-
-    await CallSession.instance.clearPendingIncomingCall(callId);
-    await CallSession.instance.clearPendingCallKitAction(callId);
+    await RtcCallManager.instance.handleRemoteTermination(
+      callId: callId,
+      reason: 'cancelled',
+    );
 
     print('FCM BACKGROUND: force-closed cancelled call');
   }
@@ -136,12 +136,10 @@ class FirebaseMessagingService {
 
           if (foregroundType == 'call_cancelled') {
             final callId = message.data['call_id']?.toString();
-
-            await CallSession.instance.markCallEnded(callId);
-            await CallKitService.instance.forceEndCall(callId);
-
-            await CallSession.instance.clearPendingIncomingCall(callId);
-            await CallSession.instance.clearPendingCallKitAction(callId);
+            await RtcCallManager.instance.handleRemoteTermination(
+              callId: callId,
+              reason: 'cancelled',
+            );
 
             return;
           }

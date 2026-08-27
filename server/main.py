@@ -11,6 +11,7 @@ import sqlite3
 import time
 import shutil
 import uuid
+from datetime import timedelta
 
 import firebase_admin
 from firebase_admin import credentials, messaging
@@ -71,7 +72,46 @@ def release_call(call_id: str, reason: str) -> bool:
     return True
 
 
-def release_calls_for_user(user_id: str, token: str | None = None):
+async def _send_terminal_call_event(
+    record: dict[str, object],
+    target_id: str,
+    message_type: str,
+    from_id: str,
+):
+    """Deliver terminal signaling through the same route as the call.
+
+    A terminal event must not depend on a live WebSocket: an incoming Android
+    CallKit UI may be the only process left on the target device.
+    """
+    call_id = str(record["call_id"])
+    payload = {
+        "type": message_type,
+        "call_id": call_id,
+        "target_id": target_id,
+        "from_id": from_id,
+    }
+    target_socket = connections.get(target_id)
+    if target_socket is not None:
+        try:
+            await target_socket.send_json(payload)
+            print("CALL TERMINAL WS:", message_type, call_id, target_id)
+            return
+        except Exception as exc:
+            print("CALL TERMINAL WS ERROR:", exc)
+
+    # Only the callee has an incoming native call UI to remove.  FCM is the
+    # fallback when that UI exists without a WebSocket (background/terminated).
+    if message_type == "call_cancelled":
+        send_call_notification(
+            target_id=target_id,
+            caller_id=str(record["caller_id"]),
+            caller_name=str(record.get("caller_name", "مستخدم CN CALL")),
+            call_id=call_id,
+            message_type="call_cancelled",
+        )
+
+
+async def release_calls_for_user(user_id: str, token: str | None = None):
     call_ids = [
         call_id
         for call_id, record in active_calls.items()
@@ -89,10 +129,28 @@ def release_calls_for_user(user_id: str, token: str | None = None):
         )
     ]
     for call_id in call_ids:
-        release_call(call_id, "ended")
+        record = active_calls.get(call_id)
+        if record is None:
+            continue
+        caller_id = str(record["caller_id"])
+        target_id = str(record["target_id"])
+        status = str(record["status"])
+        peer_id = target_id if user_id == caller_id else caller_id
+        message_type = (
+            "call_cancelled"
+            if user_id == caller_id and status == "ringing"
+            else "call_reject" if status == "ringing" else "hangup"
+        )
+        await _send_terminal_call_event(
+            record,
+            peer_id,
+            message_type,
+            user_id,
+        )
+        release_call(call_id, "cancelled" if message_type == "call_cancelled" else "ended")
 
 
-def expire_active_calls():
+async def expire_active_calls():
     now = int(time.time() * 1000)
     expired_ids = {
         call_id
@@ -112,6 +170,31 @@ def expire_active_calls():
     }
 
     for call_id in expired_ids:
+        record = active_calls.get(call_id)
+        if record is None:
+            continue
+        caller_id = str(record["caller_id"])
+        target_id = str(record["target_id"])
+        if str(record["status"]) == "ringing":
+            await _send_terminal_call_event(
+                record,
+                target_id,
+                "call_cancelled",
+                caller_id,
+            )
+        else:
+            await _send_terminal_call_event(
+                record,
+                target_id,
+                "hangup",
+                caller_id,
+            )
+            await _send_terminal_call_event(
+                record,
+                caller_id,
+                "hangup",
+                target_id,
+            )
         release_call(call_id, "timeout")
 
 FCM_TOKENS: dict[str, str] = {}
@@ -660,6 +743,8 @@ def send_call_notification(
             },
             android=messaging.AndroidConfig(
                 priority="high",
+                collapse_key=f"call-{call_id}",
+                ttl=timedelta(seconds=95),
             ),
         )
 
@@ -772,12 +857,14 @@ async def websocket_endpoint(
         return
 
     if user_id in connections:
+        # Detach the old socket before awaiting close. Its `finally` handler
+        # must not see itself as the active connection and release a call that
+        # belongs to the replacement WebSocket.
+        old_socket = connections.pop(user_id)
         try:
-            await connections[user_id].close()
+            await old_socket.close()
         except Exception:
             pass
-
-        del connections[user_id]
 
     await websocket.accept()
 
@@ -792,8 +879,15 @@ async def websocket_endpoint(
         while True:
             message = await websocket.receive_json()
 
+            # A replacement connection uses the same token. Ignore anything
+            # the closing socket manages to receive after it has been detached
+            # so it cannot mutate or release the new connection's call.
+            if connections.get(user_id) is not websocket:
+                await websocket.close()
+                return
+
             if access_tokens.get(token) != user_id:
-                release_calls_for_user(user_id, token)
+                await release_calls_for_user(user_id, token)
                 await websocket.send_json({
                     "type": "session_invalid",
                     "reason": "session_revoked",
@@ -806,7 +900,7 @@ async def websocket_endpoint(
             target_id = str(message.get("target_id", "")).strip()
             print("CALL MESSAGE:", message_type, call_id)
 
-            expire_active_calls()
+            await expire_active_calls()
 
             if message_type == "call":
                 if not call_id:
@@ -1061,16 +1155,18 @@ async def websocket_endpoint(
                 "target_id": expected_target,
                 "from_id": user_id,
             }
-            if expected_target in connections:
-                await connections[expected_target].send_json(forwarded)
-            elif message_type == "call_cancelled":
-                send_call_notification(
-                    target_id=expected_target,
-                    caller_id=caller_id,
-                    caller_name=str(record.get("caller_name", "مستخدم CN CALL")),
-                    call_id=call_id,
-                    message_type="call_cancelled",
+            if terminal:
+                await _send_terminal_call_event(
+                    record,
+                    expected_target,
+                    message_type,
+                    user_id,
                 )
+            elif expected_target in connections:
+                try:
+                    await connections[expected_target].send_json(forwarded)
+                except Exception as exc:
+                    print("CALL FORWARD WS ERROR:", exc)
 
             if terminal:
                 release_call(call_id, next_status)
@@ -1081,5 +1177,5 @@ async def websocket_endpoint(
     finally:
         if connections.get(user_id) is websocket:
             del connections[user_id]
-        release_calls_for_user(user_id, token)
+            await release_calls_for_user(user_id, token)
 # cn-call2 railway test
