@@ -106,7 +106,12 @@ class CallSession {
     await prefs.setString('cn_call_display_name', name);
     await prefs.setString('cn_call_access_token', token);
 
-    await socket.connect(id, token);
+    socket.connect(id, token).then(
+      (_) {},
+      onError: (Object error, StackTrace stackTrace) {
+        print('BACKGROUND SOCKET CONNECT ERROR: $error');
+      },
+    );
 
     // استقبال رسائل المكالمات يتم الآن بواسطة RtcCallManager.
   }
