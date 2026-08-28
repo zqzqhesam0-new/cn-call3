@@ -7,8 +7,15 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+configurations.configureEach {
+    resolutionStrategy.force(
+        "com.github.davidliu:audioswitch:039a35aefab7747c557242fa216c9ea11743b604"
+    )
+}
+
 dependencies {
     implementation("com.google.firebase:firebase-messaging:24.1.2")
+    implementation("io.livekit:livekit-android:2.11.0")
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 }
 

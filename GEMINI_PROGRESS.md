@@ -45,3 +45,18 @@ Errors Found:
 
 Notes:
 -
+
+## Android Telecom integration - 2026-08-28
+- Created backup: CallConnectionService.kt.before_telecom_buttons_20260828.bak
+- TelecomHelper registers CN CALL as a CALL_PROVIDER PhoneAccount.
+- Next modification: connect Android Telecom incoming call Connection buttons (answer/reject/disconnect) to CN CALL action events.
+- CallKit remains enabled as fallback during this phase.
+- Do not remove CallKit until Telecom path is tested on-device.
+
+## Android Telecom action bridge - 2026-08-28
+- Backups created before the next major modification.
+- CallConnectionService now exposes native accept/reject/disconnect action constants.
+- TelecomHelper can register the CN CALL PhoneAccount and submit incoming calls.
+- Next step: receive Telecom actions natively without launching MainActivity.
+- LiveKit remains Flutter-based; do not open Flutter UI from Telecom button actions.
+- Keep CallKit as fallback until Telecom is verified on a real Android device.

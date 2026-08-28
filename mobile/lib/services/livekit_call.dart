@@ -47,6 +47,9 @@ class LiveKitCall {
 
     await _room!.connect(url, token);
 
+    // Default audio route: phone earpiece, not speakerphone.
+    await AudioManager.instance.setSpeakerOutputPreferred(false);
+
     await _room!.localParticipant?.setMicrophoneEnabled(true);
   }
 

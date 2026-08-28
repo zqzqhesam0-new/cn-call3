@@ -1,6 +1,7 @@
 // ignore_for_file: avoid_print
 
 import 'dart:async';
+import 'package:flutter/services.dart';
 
 import 'package:audioplayers/audioplayers.dart';
 import 'package:uuid/uuid.dart';
@@ -317,7 +318,24 @@ class RtcCallManager {
     await session.markCallEnded(id);
     await session.clearPendingIncomingCall(id);
     await session.clearPendingCallKitAction(id);
-    await CallKitService.instance.forceEndCall(id);
+
+    try {
+      const telecomChannel = MethodChannel('cn_call/call');
+      await telecomChannel.invokeMethod(
+        'disconnectTelecomCall',
+        <String, dynamic>{
+          'callId': id,
+        },
+      );
+      print(
+        '[CN CALL][TELECOM] remote call disconnected '
+        'call_id=$id',
+      );
+    } catch (e) {
+      print(
+        '[CN CALL][TELECOM] remote disconnect failed: $e',
+      );
+    }
 
     if (reason == 'cancelled') {
       onRemoteCallCancelled?.call(id);
@@ -360,7 +378,11 @@ class RtcCallManager {
     // The server accepts the call immediately. Open the caller screen
     // without waiting for the target WebSocket/FCM path.
     // target_online only describes whether the target has a live socket.
-    await _startRinging();
+    await CallKitService.instance.showOutgoingCall(
+      callId: currentCallId!,
+      targetId: targetId,
+      callerName: session.displayName ?? 'Hesam',
+    );
     return true;
   }
 
@@ -387,14 +409,9 @@ class RtcCallManager {
     });
 
     try {
-      await _connectLiveKit(currentCallId!);
+      unawaited(_connectLiveKit(currentCallId!));
     } catch (e) {
       print('[CN CALL][LIVEKIT] accept connect error: $e');
-      await _cleanupCall(
-        reason: 'failed',
-        sendSignal: true,
-        signalType: 'hangup',
-      );
     }
 
     final activeCallId = currentCallId;

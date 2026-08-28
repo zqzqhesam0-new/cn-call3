@@ -101,13 +101,13 @@ async def _send_terminal_call_event(
 
     # Only the callee has an incoming native call UI to remove.  FCM is the
     # fallback when that UI exists without a WebSocket (background/terminated).
-    if message_type == "call_cancelled":
+    if message_type in {"call_cancelled", "hangup"}:
         send_call_notification(
             target_id=target_id,
             caller_id=str(record["caller_id"]),
             caller_name=str(record.get("caller_name", "مستخدم CN CALL")),
             call_id=call_id,
-            message_type="call_cancelled",
+            message_type=message_type,
         )
 
 

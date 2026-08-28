@@ -15,15 +15,18 @@ class CallFirebaseService : FirebaseMessagingService() {
 
         val type = message.data["type"]
 
-            if (type == "call_cancelled") {
+            if (type == "call_cancelled" || type == "hangup") {
                 val callId = message.data["call_id"] ?: return
-                val data = Bundle().apply {
-                    putString(CallkitConstants.EXTRA_CALLKIT_ID, callId)
-                }
-                sendBroadcast(
-                    CallkitIncomingBroadcastReceiver.getIntentEnded(this, data)
-                )
+
+                CallConnectionService.disconnectCall(callId)
+
                 markCallEnded(callId)
+
+                println(
+                    "CN CALL Telecom: FCM terminal event handled " +
+                        "type=$type callId=$callId"
+                )
+
                 return
             }
 
@@ -174,17 +177,37 @@ class CallFirebaseService : FirebaseMessagingService() {
             )
         }
 
-        val intent =
-            CallkitIncomingBroadcastReceiver.getIntentIncoming(
-                this,
-                data
+        // Try Android Telecom directly. For a managed PhoneAccount,
+        // addNewIncomingCall() will reject an unregistered or disabled
+        // account; in that case we keep CallKit as the fallback.
+        try {
+            TelecomHelper.addIncomingCall(
+                context = this,
+                callerId = callerId,
+                callerName = callerName,
+                callId = callId,
             )
 
-        sendBroadcast(intent)
+            println(
+                "CN CALL: Android Telecom incoming call added. " +
+                    "callerId=$callerId callerName=$callerName"
+            )
+            return
+        } catch (e: SecurityException) {
+            println(
+                "CN CALL: Telecom PhoneAccount unavailable or disabled; " +
+                    "using CallKit fallback. error=$e"
+            )
+        } catch (e: Exception) {
+            println(
+                "CN CALL: Telecom incoming call failed; using CallKit fallback. " +
+                    "error=$e"
+            )
+        }
 
         println(
-            "CN CALL: CallKit incoming broadcast sent. " +
-                "callerId=$callerId callerName=$callerName"
+            "CN CALL: Telecom did not accept incoming call; " +
+                "CallKit incoming UI is disabled."
         )
     }
 

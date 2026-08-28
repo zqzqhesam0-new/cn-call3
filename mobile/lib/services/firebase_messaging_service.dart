@@ -6,7 +6,6 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:http/http.dart' as http;
 
 import 'call_session.dart';
-import 'callkit_service.dart';
 import 'rtc_call_manager.dart';
 import 'server_config.dart';
 
@@ -43,21 +42,9 @@ Future<void> firebaseMessagingBackgroundHandler(
 
     await CallSession.instance.incomingCallFromNotification(message.data);
 
-    try {
-      final callerName =
-          message.data['caller_name']?.toString() ?? 'CN CALL';
-        final targetId = message.data['target_id']?.toString() ?? '';
-
-      await CallKitService.instance.showIncomingCall(
-        callId: callId,
-        callerId: callerId,
-        callerName: callerName,
-        targetId: targetId,
-      );
-      print('FCM BACKGROUND: CallKit incoming call shown');
-    } catch (e) {
-      print('FCM BACKGROUND CALLKIT ERROR: $e');
-    }
+    print(
+      'FCM BACKGROUND: incoming call UI is handled by Android Telecom',
+    );
 
     return;
   }
@@ -156,7 +143,7 @@ class FirebaseMessagingService {
           final callerName =
               message.data['caller_name']?.toString() ??
               'CN CALL';
-            final targetId = message.data['target_id']?.toString() ?? '';
+          final targetId = message.data['target_id']?.toString() ?? '';
 
           if (callerId.isEmpty) return;
 
@@ -169,11 +156,9 @@ class FirebaseMessagingService {
 
           if (CallSession.instance.socket.connected) return;
 
-          await CallKitService.instance.showIncomingCall(
-            callId: callId,
-            callerId: callerId,
-            callerName: callerName,
-            targetId: targetId,
+          print(
+            'FCM FOREGROUND/BACKGROUND: incoming call UI is handled by Android Telecom. '
+            'caller=$callerName target=$targetId',
           );
         },
       );

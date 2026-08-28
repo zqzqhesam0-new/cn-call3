@@ -2,6 +2,7 @@ package com.example.mobile
 
 import android.os.Bundle
 import android.content.Intent
+import android.provider.Settings
 import org.json.JSONArray
 import org.json.JSONObject
 import io.flutter.embedding.android.FlutterActivity
@@ -14,6 +15,9 @@ class MainActivity : FlutterActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        TelecomHelper.register(this)
+
         persistCallKitIntent(intent)
     }
 
@@ -125,13 +129,62 @@ class MainActivity : FlutterActivity() {
             CHANNEL
         ).setMethodCallHandler { call, result ->
 
-            if (call.method == "showIncomingCall") {
-                // CallKitService هو المسؤول عن شاشة المكالمة الواردة.
-                // لا نفتح IncomingCallActivity من MainActivity
-                // حتى لا يتم إنشاء FlutterActivity ثانية.
-                result.success(true)
-            } else {
-                result.notImplemented()
+            when (call.method) {
+                "showIncomingCall" -> {
+                    result.success(true)
+                }
+
+                "openTelecomSettings" -> {
+                    startActivity(
+                        Intent(android.telecom.TelecomManager.ACTION_CHANGE_PHONE_ACCOUNTS)
+                    )
+                    result.success(true)
+                }
+
+                "disconnectTelecomCall" -> {
+                    val callId = call.argument<String>("callId").orEmpty()
+
+                    if (callId.isEmpty()) {
+                        result.success(false)
+                    } else {
+                        CallConnectionService.disconnectCall(callId)
+                        result.success(true)
+                    }
+                }
+
+                "addIncomingTelecomCall" -> {
+                    val callerId = call.argument<String>("callerId").orEmpty()
+                    val callerName = call.argument<String>("callerName").orEmpty()
+                    val callId = call.argument<String>("callId").orEmpty()
+
+                    if (callerId.isEmpty() || callId.isEmpty()) {
+                        result.success(false)
+                    } else {
+                        try {
+                            TelecomHelper.addIncomingCall(
+                                context = this,
+                                callerId = callerId,
+                                callerName = callerName.ifEmpty { "CN CALL" },
+                                callId = callId,
+                            )
+                            result.success(true)
+                        } catch (e: SecurityException) {
+                            println(
+                                "CN CALL Telecom: incoming call rejected: $e"
+                            )
+                            result.success(false)
+                        } catch (e: Exception) {
+                            println(
+                                "CN CALL Telecom: incoming call failed: $e"
+                            )
+                            result.success(false)
+                        }
+                    }
+                }
+
+                else -> {
+                    result.notImplemented()
+                }
             }
         }
     }

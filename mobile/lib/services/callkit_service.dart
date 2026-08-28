@@ -125,6 +125,40 @@ class CallKitService {
     }
   }
 
+
+  Future<void> showOutgoingCall({
+    required String callId,
+    required String targetId,
+    required String callerName,
+  }) async {
+    final params = CallKitParams(
+      id: callId,
+      nameCaller: callerName,
+      appName: 'CN CALL',
+      handle: targetId,
+      type: 0,
+      duration: 90000,
+      extra: <String, dynamic>{
+        'callerId': targetId,
+        'callId': callId,
+        'targetId': targetId,
+      },
+      android: const AndroidParams(
+        isCustomNotification: true,
+        isShowLogo: false,
+        isShowCallID: true,
+        isShowFullLockedScreen: true,
+        isFullScreen: true,
+        isImportant: true,
+        backgroundColor: '#050505',
+        actionColor: '#00E676',
+        textColor: '#FFFFFF',
+      ),
+    );
+
+    await FlutterCallkitIncoming.startCall(params);
+  }
+
   Future<void> forceEndCall(String? callId) async {
     final id = callId?.trim() ?? '';
 
